@@ -1,0 +1,101 @@
+<?xml version="1.0" ?><TimeML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://timeml.org/timeMLdocs/TimeML_1.2.1.xsd">
+
+<DOCID>WSJ_20130321_1145</DOCID>
+
+<DCT><TIMEX3 functionInDocument="CREATION_TIME" temporalFunction="false" tid="t0" type="DATE" value="2013-03-21">March 21, 2013</TIMEX3></DCT>
+
+<TITLE>The Terminal Cancer Patient Who Won a Marathon</TITLE>
+
+
+<TEXT>
+
+In competitions against the clock, some athletes display an ability to seize control. <EVENT class="I_STATE" eid="e3">Think</EVENT> of the Clark-Kent-to-Superman <EVENT class="OCCURRENCE" eid="e4">routines</EVENT> that John Elway and Michael Jordan often <EVENT class="OCCURRENCE" eid="e5">pulled</EVENT> in the final seconds.
+
+But Iram Leon <EVENT class="I_STATE" eid="e6">stands</EVENT> on the sidelines of his own <EVENT class="OCCURRENCE" eid="e7">race</EVENT> against time. <EVENT class="STATE" eid="e8">Lodged</EVENT> in his brain is an untreatable and inoperable cancerous tumor that statistics <EVENT class="REPORTING" eid="e34">suggest</EVENT> will <EVENT class="OCCURRENCE" eid="e9">kill</EVENT> him before he is 40, <TIMEX3 tid="t1" type="SET" value="PTXS">eight years</TIMEX3> from now. Medical science is <EVENT class="OCCURRENCE" eid="e10">advancing</EVENT> at a rate that doesn't <EVENT class="I_ACTION" eid="e11">preclude</EVENT> the <EVENT class="OCCURRENCE" eid="e12">development</EVENT> of a treatment, but it's not clear if it will <EVENT class="OCCURRENCE" eid="e13">come</EVENT> in time.
+
+"No one knows what technology will be <EVENT class="STATE" eid="e14">available</EVENT> in <TIMEX3 tid="t2" type="DATE" value="2021">five years</TIMEX3>," <EVENT class="REPORTING" eid="e15">said</EVENT> Allan Friedman, Duke University Hospital neurosurgeon in chief, who in <TIMEX3 tid="t3" type="DATE" value="2018">2011</TIMEX3> <EVENT class="OCCURRENCE" eid="e16">removed</EVENT> as much of Leon's brain tumor as possible.
+
+The torment of enduring that wait can paste a cancer patient to the couch, a surrender heavily associated with deadlier outcomes. Some seek escape in their careers, but that is no longer an option for Leon, who early <TIMEX3 tid="t4" type="DATE" value="2011">this year</TIMEX3> was <EVENT class="OCCURRENCE" eid="e21">forced</EVENT> to <EVENT class="OCCURRENCE" eid="e22">step</EVENT> down as a juvenile probation officer in Travis County, Texas, a position he had <EVENT class="OCCURRENCE" eid="e23">held</EVENT> for almost <TIMEX3 tid="t5" type="DATE" value="2013">seven years</TIMEX3>. His thinking is no longer clear, <EVENT class="REPORTING" eid="e24">said</EVENT> Leon, <EVENT class="OCCURRENCE" eid="e25">adding</EVENT>, "I was <EVENT class="OCCURRENCE" eid="e26">making</EVENT> too many <EVENT class="OCCURRENCE" eid="e35">mistakes</EVENT> on the stand."
+
+But Leon can still <EVENT class="OCCURRENCE" eid="e27">run</EVENT>. <TIMEX3 tid="t6" type="DURATION" value="P7Y">Two years</TIMEX3> after his brain-cancer <EVENT class="OCCURRENCE" eid="e36">diagnosis</EVENT>, he recently <EVENT class="OCCURRENCE" eid="e28">ran</EVENT> a sub-five-minute mile for the first time since high <EVENT class="OCCURRENCE" eid="e37">school</EVENT>. What has <EVENT class="OCCURRENCE" eid="e29">startled</EVENT> the medical community even more is <EVENT class="OCCURRENCE" eid="e38">what</EVENT> Leon did <TIMEX3 tid="t9" type="DATE" value="2013-03">this month</TIMEX3> in Beaumont, Texas. He <EVENT class="OCCURRENCE" eid="e30">won</EVENT> the Gusher Marathon, <EVENT class="ASPECTUAL" eid="e31">finishing</EVENT> in <TIMEX3 tid="t7" type="DURATION" value="P2Y">3:07:35</TIMEX3>. That was one second slower than his personal record in the 26.2-mile event, <EVENT class="OCCURRENCE" eid="e32">set</EVENT> days before he <EVENT class="ASPECTUAL" eid="e33">underwent</EVENT> brain <EVENT class="OCCURRENCE" eid="e39">surgery</EVENT> in <TIMEX3 tid="t8" type="DURATION" value="PT5M">early 2011</TIMEX3>.
+
+</TEXT>
+
+
+<MAKEINSTANCE aspect="NONE" eiid="ei3" eventID="e3" polarity="POS" pos="VERB" tense="PRESENT"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei4" eventID="e4" polarity="POS" pos="NOUN" tense="PAST"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei5" eventID="e5" polarity="POS" pos="VERB" tense="PAST"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei6" eventID="e6" polarity="POS" pos="VERB" tense="PRESENT"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei7" eventID="e7" polarity="POS" pos="NOUN" tense="PRESENT"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei8" eventID="e8" polarity="POS" pos="VERB" tense="PASTPART"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei9" eventID="e9" polarity="POS" pos="VERB" tense="FUTURE"/>
+<MAKEINSTANCE aspect="PROGRESSIVE" eiid="ei10" eventID="e10" polarity="POS" pos="VERB" tense="PRESENT"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei11" eventID="e11" polarity="NEG" pos="VERB" tense="PRESENT"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei12" eventID="e12" polarity="POS" pos="NOUN" tense="PRESENT"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei13" eventID="e13" polarity="POS" pos="VERB" tense="FUTURE"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei14" eventID="e14" polarity="POS" pos="ADJECTIVE" tense="FUTURE"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei15" eventID="e15" polarity="POS" pos="VERB" tense="PAST"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei16" eventID="e16" polarity="POS" pos="VERB" tense="PAST"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei21" eventID="e21" polarity="POS" pos="VERB" tense="PAST"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei22" eventID="e22" polarity="POS" pos="VERB" tense="INFINITIVE"/>
+<MAKEINSTANCE aspect="PERFECTIVE" eiid="ei23" eventID="e23" polarity="POS" pos="VERB" tense="PAST"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei24" eventID="e24" polarity="POS" pos="VERB" tense="PAST"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei25" eventID="e25" polarity="POS" pos="VERB" tense="PRESPART"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei26" eventID="e26" polarity="POS" pos="VERB" tense="NONE"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei27" eventID="e27" modality="can" polarity="POS" pos="VERB" tense="NONE"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei28" eventID="e28" polarity="POS" pos="VERB" tense="PAST"/>
+<MAKEINSTANCE aspect="PERFECTIVE" eiid="ei29" eventID="e29" polarity="POS" pos="VERB" tense="PRESENT"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei30" eventID="e30" polarity="POS" pos="VERB" tense="PAST"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei31" eventID="e31" polarity="POS" pos="VERB" tense="PRESPART"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei32" eventID="e32" polarity="POS" pos="VERB" tense="PASTPART"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei33" eventID="e33" polarity="POS" pos="VERB" tense="PAST"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei34" eventID="e34" modality="" polarity="POS" pos="VERB" tense="PRESENT"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei35" eventID="e35" modality="" pos="NOUN" tense="NONE"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei36" eventID="e36" modality="" polarity="POS" pos="NOUN" tense="NONE"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei37" eventID="e37" modality="" polarity="POS" pos="NOUN" tense="NONE"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei38" eventID="e38" modality="" pos="OTHER" tense="NONE"/>
+<MAKEINSTANCE aspect="NONE" eiid="ei39" eventID="e39" modality="" polarity="POS" pos="NOUN" tense="NONE"/>
+
+<TLINK eventInstanceID="ei3" lid="l3" relType="VAGUE" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei4" lid="l5" relType="BEFORE" relatedToEventInstance="ei3"/>
+<TLINK eventInstanceID="ei5" lid="l6" relType="BEFORE" relatedToEventInstance="ei3"/>
+<TLINK eventInstanceID="ei6" lid="l7" relType="INCLUDES" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei3" lid="l8" relType="VAGUE" relatedToEventInstance="ei6"/>
+<TLINK eventInstanceID="ei7" lid="l9" relType="INCLUDES" relatedToEventInstance="ei6"/>
+<TLINK eventInstanceID="ei9" lid="l10" relType="IS_INCLUDED" relatedToTime="t1"/>
+<TLINK eventInstanceID="ei8" lid="l11" relType="INCLUDES" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei6" lid="l12" relType="VAGUE" relatedToEventInstance="ei8"/>
+<TLINK eventInstanceID="ei9" lid="l13" relType="IS_INCLUDED" relatedToEventInstance="ei8"/>
+<TLINK eventInstanceID="ei10" lid="l14" relType="INCLUDES" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei8" lid="l15" relType="VAGUE" relatedToEventInstance="ei10"/>
+<TLINK eventInstanceID="ei11" lid="l16" relType="VAGUE" relatedToEventInstance="ei10"/>
+<TLINK eventInstanceID="ei12" lid="l17" relType="VAGUE" relatedToEventInstance="ei10"/>
+<TLINK eventInstanceID="ei13" lid="l18" relType="VAGUE" relatedToEventInstance="ei10"/>
+<TLINK eventInstanceID="ei14" lid="l19" relType="IS_INCLUDED" relatedToTime="t2"/>
+<TLINK eventInstanceID="ei16" lid="l20" relType="IS_INCLUDED" relatedToTime="t3"/>
+<TLINK eventInstanceID="ei15" lid="l21" relType="BEFORE" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei10" lid="l22" relType="INCLUDES" relatedToEventInstance="ei15"/>
+<TLINK eventInstanceID="ei14" lid="l23" relType="AFTER" relatedToEventInstance="ei15"/>
+<TLINK eventInstanceID="ei16" lid="l24" relType="BEFORE" relatedToEventInstance="ei15"/>
+<TLINK eventInstanceID="ei21" lid="l28" relType="IS_INCLUDED" relatedToTime="t4"/>
+<TLINK eventInstanceID="ei23" lid="l29" relType="IS_INCLUDED" relatedToTime="t5"/>
+<TLINK eventInstanceID="ei24" lid="l36" relType="BEFORE" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei25" lid="l38" relType="AFTER" relatedToEventInstance="ei24"/>
+<TLINK eventInstanceID="ei26" lid="l39" relType="BEFORE" relatedToEventInstance="ei24"/>
+<TLINK eventInstanceID="ei27" lid="l40" relType="INCLUDES" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei24" lid="l41" relType="IS_INCLUDED" relatedToEventInstance="ei27"/>
+<TLINK eventInstanceID="ei28" lid="l42" relType="IS_INCLUDED" relatedToTime="t6"/>
+<TLINK eventInstanceID="ei28" lid="l43" relType="BEFORE" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei27" lid="l44" relType="VAGUE" relatedToEventInstance="ei28"/>
+<TLINK eventInstanceID="ei29" lid="l45" relType="BEFORE" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei28" lid="l46" relType="BEFORE" relatedToEventInstance="ei29"/>
+<TLINK eventInstanceID="ei31" lid="l47" relType="VAGUE" relatedToTime="t7"/>
+<TLINK eventInstanceID="ei30" lid="l48" relType="BEFORE" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei29" lid="l49" relType="AFTER" relatedToEventInstance="ei30"/>
+<TLINK eventInstanceID="ei31" lid="l50" relType="SIMULTANEOUS" relatedToEventInstance="ei30"/>
+<TLINK eventInstanceID="ei33" lid="l51" relType="IS_INCLUDED" relatedToTime="t8"/>
+<TLINK eventInstanceID="ei32" lid="l52" relType="BEFORE" relatedToTime="t0"/>
+<TLINK eventInstanceID="ei30" lid="l53" relType="BEFORE" relatedToEventInstance="ei32"/>
+<TLINK eventInstanceID="ei33" lid="l54" relType="AFTER" relatedToEventInstance="ei32"/>
+
+</TimeML>
