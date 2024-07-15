@@ -55,11 +55,4 @@ Text for Analysis:
 
 ---
 
-Output Format:
-For each pair of verbs, provide the temporal relation as:
-- e1 BEFORE e2
-- e1 AFTER e2
-- e1 VAGUE e2
-if e1 BEFORE e2 and e2 BEFORE e3 don't write e1 BEFORE e3.
-
 the list of pairs are:
