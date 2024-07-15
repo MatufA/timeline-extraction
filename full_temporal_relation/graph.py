@@ -7,7 +7,7 @@ from functools import partial
 
 
 class Graph:
-    def __init__(self, supported_relation=('AFTER', 'BEFORE'), relation_key: str='relation'):
+    def __init__(self, supported_relation=('AFTER', 'BEFORE'), relation_key: str = 'relation'):
         self.supported_relation = supported_relation
         self.relation_key = relation_key
 
@@ -48,7 +48,7 @@ class Graph:
         return graph.subgraph(sub_graph).copy()
 
     def find_cycles(self, df):
-        cycles = []
+        cycles = {}
         idx = 0
         for _, group in df.groupby('docid'):
             if group[self.relation_key].isin(self.supported_relation).count() < 3:
@@ -56,16 +56,15 @@ class Graph:
             try:
                 sub_graph = self.generate_directed_graph(df=group)
                 cycle = nx.find_cycle(sub_graph, orientation='original')
-                print('cycle:', cycle)
+                docid = cycle[0][0].split('-')[0]
+                if docid in cycles:
+                    cycles[docid].append(cycle)
+                else:
+                    cycles[docid] = [cycle]
             except nx.NetworkXNoCycle:
                 idx += 1
             except ValueError:
                 print(group)
-            else:
-                if cycle is not None:
-                    print(cycle)
-                if idx > 2:
-                    cycles.append(cycle)
 
         return cycles
 
@@ -112,4 +111,3 @@ def create_simple_graph(graph):
         nx.add_path(simple_graph, path)
 
     return simple_graph, simple_edges
-

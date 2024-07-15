@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from full_temporal_relation.graph import Graph
+
 
 def simple_consistency_rate(df: pd.DataFrame) -> dict:
     """
@@ -55,9 +57,13 @@ def correct_consistency_rate(df_predicted: pd.DataFrame, df_true: pd.DataFrame) 
     return results
 
 
+def get_n_graph_cycles(df: pd.DataFrame) -> dict:
+    return {k: len(v) for k, v in Graph().find_cycles(df).items()}
+
+
 if __name__ == '__main__':
-    model_name = 'gemini-1.5-pro'
-    # model_name = 'gemini-1.5-flash'
+    # model_name = 'gemini-1.5-pro'
+    model_name = 'gemini-1.5-flash'
     method = 'zero-shot'
 
     MATRES_DATA_PATH = Path('../data')
@@ -65,6 +71,7 @@ if __name__ == '__main__':
     parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / method / f'platinum-test-results-{model_name}.csv'
     gold_data_path = MATRES_DATA_PATH / 'MATRES' / 'platinum.txt'
     results_path = TRC_RAW_PATH / 'results' / method / f'platinum-results-{model_name}.csv'
+    min_vote = 0
 
     predicted_df = pd.read_csv(parsed_response_path)
 
@@ -78,6 +85,7 @@ if __name__ == '__main__':
 
     predicted_df['score'] = 1
     predicted_sum_df = predicted_df.groupby(['docid', 'unique_id', 'relation'])['score'].sum().reset_index()
+    predicted_sum_df = predicted_sum_df[predicted_sum_df['score'] > min_vote]
 
     agg_preds = []
     for (docid, unique_id), group in predicted_sum_df.groupby(['docid', 'unique_id']):
@@ -89,13 +97,16 @@ if __name__ == '__main__':
             agg_preds.append({
                 'docid': docid,
                 'unique_id': unique_id,
-                'relation': 'VAGUE'
+                'relation': 'VAGUE',
+                'max_score': max_score,
+                'conflict_rel': ','.join(relations)
             })
         else:
             agg_preds.append({
                 'docid': docid,
                 'unique_id': unique_id,
-                'relation': relations[0].upper()
+                'relation': relations[0].upper(),
+                'max_score': max_score
             })
 
     agg_pred_df = pd.DataFrame(agg_preds)
@@ -105,7 +116,8 @@ if __name__ == '__main__':
                         .drop_duplicates(merge_cols))
 
     scr = simple_consistency_rate(predicted_agg_df)
-    ccr = correct_consistency_rate(df_predicted=predicted_agg_df, df_true=platinum_df)
+    ccr = correct_consistency_rate(df_predicted=predicted_agg_df.drop('conflict_rel', axis=1), df_true=platinum_df)
+    cycles = get_n_graph_cycles(predicted_agg_df)
 
     scr_df = pd.DataFrame.from_dict(scr, orient='index', columns=['scr']).reset_index()
     scr_df.columns = ['docid', 'scr']
@@ -113,13 +125,18 @@ if __name__ == '__main__':
     ccr_df = pd.DataFrame.from_dict(ccr, orient='index', columns=['ccr']).reset_index()
     ccr_df.columns = ['docid', 'ccr']
 
-    metrics_df = pd.merge(ccr_df, scr_df, on='docid', how='inner')
+    cycles_df = pd.DataFrame.from_dict(cycles, orient='index', columns=['ccr']).reset_index()
+    cycles_df.columns = ['docid', 'n_cycles']
 
-    predicted_sum_df.relation = predicted_sum_df.relation.str.upper()
-    final_df = pd.merge(predicted_sum_df, predicted_agg_df.drop('score', axis=1),
+    metrics_df = pd.merge(ccr_df, scr_df, on='docid', how='inner')
+    metrics_df = pd.merge(metrics_df, cycles_df, on='docid', how='left')
+
+    final_df = pd.merge(predicted_df, agg_pred_df,
                         on=['docid', 'unique_id'],
-                        suffixes=("_selected", None))
-    final_df = pd.merge(final_df, metrics_df, on=['docid'])
+                        suffixes=(None, "_selected"),
+                        how='left')
+    final_df = pd.merge(final_df, metrics_df, on=['docid'], how='left')
+    final_df['min_vote'] = min_vote
 
     final_df.to_csv(results_path, index=False)
 
