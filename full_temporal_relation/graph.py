@@ -48,6 +48,7 @@ class Graph:
         return graph.subgraph(sub_graph).copy()
 
     def find_cycles(self, df):
+        cycles = []
         idx = 0
         for _, group in df.groupby('docid'):
             if group[self.relation_key].isin(self.supported_relation).count() < 3:
@@ -64,7 +65,9 @@ class Graph:
                 if cycle is not None:
                     print(cycle)
                 if idx > 2:
-                    return cycle
+                    cycles.append(cycle)
+
+        return cycles
 
 
 def create_simple_graph(graph):
