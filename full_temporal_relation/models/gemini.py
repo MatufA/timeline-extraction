@@ -32,8 +32,8 @@ def generate_responses(model: genai.GenerativeModel, platinum_text_prepared_path
         records = (record for record in records if record['doc_id'] not in doc_iter)
 
     with results_path.open('a') as file:
-        for record in tqdm(records, desc='Platinum Text evaluation'):
-            for trail in trange(5, desc=f'Processing record: {record["doc_id"]}'):
+        for record in tqdm(records, desc='Platinum Text evaluation', position=0):
+            for trail in trange(5, desc=f'Processing record: {record["doc_id"]}', position=1, leave=False):
                 prompt = prompt_template.format(text=record['text'])
                 response = model.generate_content(prompt)
 
@@ -45,27 +45,29 @@ def generate_responses(model: genai.GenerativeModel, platinum_text_prepared_path
                 json_line = json.dumps(record)
                 file.write(json_line + '\n')
 
-                sleep(30)
+                sleep(30) if model.model_name.endswith('pro') else None
+
+            sleep(10) if model.model_name.endswith('flash') else None
 
 
 if __name__ == '__main__':
     # model_name = 'gemini-1.5-pro'
     model_name = 'gemini-1.5-flash'
-    method = 'zero-shot'
-    # model = initial_google_genai(model_name,
-    #                              max_output_tokens=2000,
-    #                              stop_sequences=['DONE!', '\n\n'])
-    #
+    method = 'few-shot' #'zero-shot'
+    model = initial_google_genai(model_name,
+                                 max_output_tokens=2000,
+                                 stop_sequences=['DONE!', '\n\n'])
+
     MATRES_DATA_PATH = Path('../../data')
     TRC_RAW_PATH = MATRES_DATA_PATH / 'TRC'
     results_path = TRC_RAW_PATH / 'llm_response' / method / f'platinum-test-{model_name}.jsonl'
     PLATINUM_RAW = MATRES_DATA_PATH / 'MATRES' / 'raw' / 'TBAQ-cleaned' / 'te3-platinum'
-    parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / 'zero-shot' / f'platinum-test-results-{model_name}.csv'
+    parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / method / f'platinum-test-results-{model_name}.csv'
 
-    # generate_responses(model,
-    #                    platinum_text_prepared_path=TRC_RAW_PATH / 'raw_text' / 'platinum_text_prepared.json',
-    #                    prompt_path=TRC_RAW_PATH / 'prompts' / method / 'graph-generation.txt',
-    #                    results_path=results_path')
+    generate_responses(model,
+                       platinum_text_prepared_path=TRC_RAW_PATH / 'raw_text' / 'platinum_text_prepared.json',
+                       prompt_path=TRC_RAW_PATH / 'prompts' / method / 'graph-generation-v1.txt',
+                       results_path=results_path)
 
     all_parsed_response_df = pd.DataFrame(columns=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2',
                                                    'relation', 'unique_id', 'model_name']).astype({'unique_id': str})
