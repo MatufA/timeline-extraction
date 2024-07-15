@@ -7,14 +7,15 @@ from functools import partial
 
 
 class Graph:
-    def __init__(self, supported_relation=('AFTER', 'BEFORE')):
+    def __init__(self, supported_relation=('AFTER', 'BEFORE'), relation_key: str='relation'):
         self.supported_relation = supported_relation
+        self.relation_key = relation_key
 
     def create_edges(self, df):
         edges_df = pd.DataFrame()
-        edges_df[['source', 'target']] = df[['docid', 'eiid1', 'eiid2', 'relation']] \
+        edges_df[['source', 'target']] = df[['docid', 'eiid1', 'eiid2', self.relation_key]] \
             .apply(lambda row: (f"{row.docid}-{row['eiid2']}", f"{row.docid}-{row['eiid1']}")
-        if row['relation'] == 'AFTER' else (f"{row.docid}-{row['eiid1']}", f"{row.docid}-{row['eiid2']}"),
+        if row[self.relation_key] == 'AFTER' else (f"{row.docid}-{row['eiid1']}", f"{row.docid}-{row['eiid2']}"),
                    axis='columns', result_type="expand")
         return edges_df
 
@@ -27,7 +28,7 @@ class Graph:
         return pd.DataFrame(nodes_flatten).drop_duplicates(ignore_index=True)
 
     def generate_directed_graph(self, df):
-        df = df.loc[df['relation'].isin(self.supported_relation)]
+        df = df.loc[df[self.relation_key].isin(self.supported_relation)]
         edges = self.create_edges(df)
         nodes = self.create_nodes(df)
 
@@ -45,6 +46,25 @@ class Graph:
                 sub_graph.append(n)
 
         return graph.subgraph(sub_graph).copy()
+
+    def find_cycles(self, df):
+        idx = 0
+        for _, group in df.groupby('docid'):
+            if group[self.relation_key].isin(self.supported_relation).count() < 3:
+                continue
+            try:
+                sub_graph = self.generate_directed_graph(df=group)
+                cycle = nx.find_cycle(sub_graph, orientation='original')
+                print('cycle:', cycle)
+            except nx.NetworkXNoCycle:
+                idx += 1
+            except ValueError:
+                print(group)
+            else:
+                if cycle is not None:
+                    print(cycle)
+                if idx > 2:
+                    return cycle
 
 
 def create_simple_graph(graph):
@@ -89,3 +109,4 @@ def create_simple_graph(graph):
         nx.add_path(simple_graph, path)
 
     return simple_graph, simple_edges
+
