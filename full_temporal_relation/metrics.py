@@ -64,7 +64,7 @@ def get_n_graph_cycles(df: pd.DataFrame) -> dict:
 if __name__ == '__main__':
     # model_name = 'gemini-1.5-pro'
     model_name = 'gemini-1.5-flash'
-    method = 'zero-shot'
+    method = 'few-shot' #'zero-shot'
 
     MATRES_DATA_PATH = Path('../data')
     TRC_RAW_PATH = MATRES_DATA_PATH / 'TRC'
