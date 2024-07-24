@@ -42,6 +42,11 @@ def prepare_df_from_response(response: str, doc_obj: Doc):
             verb1 = doc_obj.mapping[e1]
             verb2 = doc_obj.mapping[e2]
 
+        if relation == 'after':
+            verb1, verb2 = verb2, verb1
+            e1, e2 = e2, e1
+            relation = 'before'
+
         data.append({
             'docid': doc_obj.docid,
             'verb1': verb1,

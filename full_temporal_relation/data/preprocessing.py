@@ -10,6 +10,11 @@ def load_data(paht: Union[str, Path]) -> pd.DataFrame:
                      names=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2', 'relation'])
     df.eiid1 = 'e' + df.eiid1.astype(str)
     df.eiid2 = 'e' + df.eiid2.astype(str)
+
+    mask = df['relation'] == 'after'
+    df.loc[mask, ['verb1', 'verb2']] = df.loc[mask, ['verb2', 'verb1']].values
+    df['relation'] = df['relation'].replace('AFTER', 'BEFORE')
+
     return df
 
 
