@@ -1,0 +1,60 @@
+Task Overview:
+You are given a text, in which some verbs are uniquely marked by e[NUMBER] (e.g., e[1], e[2]).
+Your task is to say which of the verbs happened first in a chronological order.
+More specifically, you need to return for each pair of verbs, which is two sentence apart,
+ a single label out of the four potential labels:
+BEFORE - the first verb happened before the second.
+AFTER - the first verb happened after the second.
+EQUAL - both verbs happened together.
+VAGUE - It is impossible to know based on the context provided.
+
+write "DONE!" at the end of your answer
+
+Example:
+#########
+---
+
+Text for Analysis:
+
+NAIROBI, Kenya (AP) _
+
+Suspected bombs e1:EXPLODED outside the U.S. embassies in the Kenyan and Tanzanian capitals Friday, e2:KILLING dozens of people, witnesses e3:SAID.
+
+The American ambassador to Kenya was among hundreds e12:INJURED, a local TV e4:SAID.
+
+``It was definitely a bomb,'' e5:SAID a U.S. Embassy official in Nairobi, who e6:REFUSED to e7:IDENTIFY himself. ``You can e8:SEE a huge crater behind the building, and a bomb e9:WENT off at the embassy in Tanzania at the same time,'' he e10:SAID.
+
+---
+the correct labels are:
+- e1 BEFORE e2
+- e1 BEFORE e3
+- e2 BEFORE e3
+- e1 BEFORE e12
+- e1 BEFORE e4
+- e2 BEFORE e12
+- e2 BEFORE e4
+- e3 AFTER e12
+- e3 BEFORE e4
+- e12 BEFORE e4
+- e12 BEFORE e5
+- e4 VAGUE e5
+- e5 VAGUE e8
+- e5 AFTER e9
+- e5 BEFORE e10
+- e8 AFTER e9
+- e8 BEFORE e10
+- e9 BEFORE e10
+
+#########
+
+---
+
+Text for Analysis:
+
+ {text}
+
+---
+
+replace the [RELATION] with the right label:
+
+{relations}

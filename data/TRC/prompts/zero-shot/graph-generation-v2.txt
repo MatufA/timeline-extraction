@@ -1,0 +1,24 @@
+Task Overview:
+You are given a text, in which some verbs are uniquely marked by e[NUMBER] (e.g., e[1], e[2]).
+Your task is to say which of the verbs happened first in a chronological order.
+More specifically, you need to return for each pair of verbs a single label out of the four potential labels:
+BEFORE - the first verb happened before the second.
+AFTER - the first verb happened after the second.
+EQUAL - both verbs happened together.
+VAGUE - It is impossible to know based on the context provided.
+
+write "DONE!" at the end of your answer
+
+---
+
+Text for Analysis:
+
+ {text}
+
+---
+
+Provide ONLY the final answer.
+
+replace the [RELATION] with the right label:
+
+{relations}
