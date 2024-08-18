@@ -1,0 +1,69 @@
+Task Overview:
+You are given a text, in which some verbs are uniquely marked by e[NUMBER] (e.g., e[1], e[2]).
+Your task is to say which of the verbs happened first in a chronological order.
+More specifically, you need to return for each pair of verbs, which is two sentence apart,
+ a single label out of the four potential labels:
+BEFORE - the first verb happened before the second.
+AFTER - the first verb happened after the second.
+EQUAL - both verbs happened together.
+VAGUE - It is impossible to know based on the context provided.
+
+write "DONE!" at the end of your answer
+
+Example:
+#########
+---
+
+Text for Analysis:
+
+NAIROBI, Kenya (AP) _
+
+Suspected bombs e1:EXPLODED outside the U.S. embassies in the Kenyan and Tanzanian capitals Friday, e2:KILLING dozens of people, witnesses e3:SAID.
+
+The American ambassador to Kenya was among hundreds e12:INJURED, a local TV e4:SAID.
+
+``It was definitely a bomb,'' e5:SAID a U.S. Embassy official in Nairobi, who e6:REFUSED to e7:IDENTIFY himself. ``You can e8:SEE a huge crater behind the building, and a bomb e9:WENT off at the embassy in Tanzania at the same time,'' he e10:SAID.
+
+---
+the correct labels are:
+- e1:EXPLODED BEFORE e2:KILLING (since EXPLODED happened before KILLING)
+- e1:EXPLODED BEFORE e3:SAID (EXPLODED happened before SAID)
+- e2:KILLING BEFORE e3:SAID (KILLING happened before SAID)
+- e1:EXPLODED BEFORE e12:INJURED  (since EXPLODED happened before INJURED)
+- e1:EXPLODED BEFORE e4:SAID  (since EXPLODED happened before SAID)
+- e2:KILLING BEFORE e12:INJURED  (since KILLING happened before INJURED)
+- e2:KILLING BEFORE e4:SAID (KILLING happened before SAID)
+- e3:SAID AFTER e12:INJURED (SAID happened before INJURED)
+- e3:SAID BEFORE e4:SAID (since witnesses SAID happened before a local TV SAID)
+- e12:INJURED BEFORE e4:SAID (INJURED happened before SAID)
+- e12:INJURED BEFORE e5:SAID (INJURED happened before SAID)
+- e4:SAID VAGUE e5:SAID (a local TV SAID happened before a U.S. Embassy official in Nairobi SAID)
+- e5:SAID VAGUE e8:SEE (SAID happened before SEE)
+- e5:SAID AFTER e9:WENT (since SAID happened before WENT)
+- e5:SAID BEFORE e10:SAID (since a U.S. Embassy official in Nairobi SAID happened before SAID)
+- e8:SEE AFTER e9:WENT (SEE happened before WENT)
+- e8:SEE BEFORE e10:SAID (since SEE happened before SAID)
+- e9:WENT BEFORE e10:SAID (WENT happened before SAID)
+
+#########
+
+---
+
+Text for Analysis:
+
+ {text}
+
+---
+
+Provide ONLY the final answer.
+
+Output Format:
+For each pair of verbs, provide the temporal relation as and explain shortly in one line:
+- e1:[VERB1] BEFORE e2:[VERB2] (since [VERB1] happened before [VERB2])
+- e1:[VERB1] AFTER e2:[VERB2] (since [VERB1] happened after [VERB2])
+- e1:[VERB1] VAGUE e2:[VERB2] (since [VERB1] could happen before and after [VERB2] based on the context provided)
+if e1 BEFORE e2 and e2 BEFORE e3 don't write e1 BEFORE e3.
+
+replace the [RELATION] with the right label and add explanation:
+
+{relations}
