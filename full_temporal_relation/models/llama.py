@@ -19,17 +19,21 @@ def load_llama_model(path: Union[str, os.PathLike]):
 
 if __name__ == '__main__':
 
-    model = "meta-llama/Llama-2-7b-chat-hf"
-    pipeline, tokenizer = load_llama_model(model)
+    model = "meta-llama/Meta-Llama-3.1-70B-Instruct"
+    # pipeline, tokenizer = load_llama_model(model)
+    #
+    # sequences = pipeline(
+    #     'I liked "Breaking Bad" and "Band of Brothers". Do you have any recommendations of other shows I might like?\n',
+    #     do_sample=True,
+    #     top_k=1,
+    #     num_return_sequences=1,
+    #     eos_token_id=tokenizer.eos_token_id,
+    #     max_length=200,
+    # )
+    #
+    # for seq in sequences:
+    #     print(f"Result: {seq['generated_text']}")
 
-    sequences = pipeline(
-        'I liked "Breaking Bad" and "Band of Brothers". Do you have any recommendations of other shows I might like?\n',
-        do_sample=True,
-        top_k=1,
-        num_return_sequences=1,
-        eos_token_id=tokenizer.eos_token_id,
-        max_length=200,
-    )
-
-    for seq in sequences:
-        print(f"Result: {seq['generated_text']}")
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-70B-Instruct")
+    tokens = tokenizer.tokenize("hello how are you today?")
+    print(len(tokens))

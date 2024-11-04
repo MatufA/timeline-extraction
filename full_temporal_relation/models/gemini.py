@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 from time import sleep
+from typing import List
 
 import pandas as pd
 from tqdm import tqdm, trange
@@ -10,6 +11,43 @@ import google.generativeai as genai
 
 from full_temporal_relation.data.postprocessing import prepare_df_from_response
 from full_temporal_relation.data.preprocessing import Doc
+from full_temporal_relation.models.LLModel import LLModel
+
+
+class Gemini(LLModel):
+
+    def __init__(self, model_name: str, max_output_tokens: int = 2000, stop_sequences: List[str] = None,
+                 n_trails: int = 5):
+        if stop_sequences is None:
+            stop_sequences = ['DONE!', '\n\n']
+
+        model = self._initial_google_genai(model_name,
+                                           max_output_tokens=max_output_tokens,
+                                           stop_sequences=stop_sequences)
+        each_trail = model.model_name.endswith('pro')
+        each_doc = model.model_name.endswith('flash')
+        super().__init__(model, each_trail, each_doc, n_trails)
+
+    @staticmethod
+    def _initial_google_genai(model_name: str, max_output_tokens: int,
+                              stop_sequences: list) -> genai.GenerativeModel:
+        genai.configure(api_key=os.environ['GOOGLE_API_KEY'])
+        return genai.GenerativeModel(model_name,
+                                     generation_config=genai.GenerationConfig(
+                                         max_output_tokens=max_output_tokens,
+                                         stop_sequences=stop_sequences
+                                     ))
+
+    def generate_response(self, prompt):
+        return self.model.generate_content(prompt)
+
+    def prepare_response(self, response):
+        return {
+            'response': response.text,
+            'total_token_count': response.usage_metadata.total_token_count,
+            'prompt_token_count': response.usage_metadata.prompt_token_count,
+            'candidates_token_count': response.usage_metadata.candidates_token_count
+        }
 
 
 def initial_google_genai(model_name: str, max_output_tokens: int, stop_sequences: list) -> genai.GenerativeModel:
@@ -51,12 +89,12 @@ def generate_responses(model: genai.GenerativeModel, platinum_text_prepared_path
 
 
 if __name__ == '__main__':
-    # model_name = 'gemini-1.5-pro'
-    model_name = 'gemini-1.5-flash'
-    method = 'few-shot' #'zero-shot'
-    model = initial_google_genai(model_name,
-                                 max_output_tokens=2000,
-                                 stop_sequences=['DONE!', '\n\n'])
+    model_name = 'gemini-1.5-pro'
+    # model_name = 'gemini-1.5-flash'
+    method = 'zero-shot'  #'few-shot'
+    # model = initial_google_genai(model_name,
+    #                              max_output_tokens=2000,
+    #                              stop_sequences=['DONE!', '\n\n'])
 
     MATRES_DATA_PATH = Path('../../data')
     TRC_RAW_PATH = MATRES_DATA_PATH / 'TRC'
@@ -64,10 +102,10 @@ if __name__ == '__main__':
     PLATINUM_RAW = MATRES_DATA_PATH / 'MATRES' / 'raw' / 'TBAQ-cleaned' / 'te3-platinum'
     parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / method / f'platinum-test-results-{model_name}.csv'
 
-    generate_responses(model,
-                       platinum_text_prepared_path=TRC_RAW_PATH / 'raw_text' / 'platinum_text_prepared.json',
-                       prompt_path=TRC_RAW_PATH / 'prompts' / method / 'graph-generation-v1.txt',
-                       results_path=results_path)
+    # generate_responses(model,
+    #                    platinum_text_prepared_path=TRC_RAW_PATH / 'raw_text' / 'platinum_text_prepared.json',
+    #                    prompt_path=TRC_RAW_PATH / 'prompts' / method / 'graph-generation-v1.txt',
+    #                    results_path=results_path)
 
     all_parsed_response_df = pd.DataFrame(columns=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2',
                                                    'relation', 'unique_id', 'model_name']).astype({'unique_id': str})
