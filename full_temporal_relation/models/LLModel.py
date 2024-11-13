@@ -31,13 +31,13 @@ class LLModel(abc.ABC):
         records = json.load(text_path.open('r'))
         prompt_template = prompt_path.open('r').read()
 
-        if results_path.exists():
-            records_partial_df: pd.DataFrame = pd.read_json(results_path, lines=True)
-
-            if not records_partial_df.empty:
-                # doc_iter = records_partial_df.groupby('doc_id')['n_tokens'].count().to_dict()
-                doc_iter = records_partial_df.doc_id.unique()
-                records = (record for record in records if record['doc_id'] not in doc_iter)
+        # if results_path.exists():
+        #     records_partial_df: pd.DataFrame = pd.read_json(results_path, lines=True)
+        #
+        #     if not records_partial_df.empty:
+        #         # doc_iter = records_partial_df.groupby('doc_id')['n_tokens'].count().to_dict()
+        #         doc_iter = records_partial_df.doc_id.unique()
+        #         records = (record for record in records if record['doc_id'] not in doc_iter)
 
         with results_path.open('a') as file:
             for record in tqdm(records, desc='Text evaluation', position=0, leave=True):

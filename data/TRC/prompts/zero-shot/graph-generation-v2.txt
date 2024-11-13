@@ -1,5 +1,5 @@
 Task Overview:
-You are given a text, in which some verbs are uniquely marked by e[NUMBER] (e.g., e[1], e[2]).
+You are given a text, in which some verbs are uniquely marked by ei[NUMBER] (e.g., ei[1], ei[2]).
 Your task is to say which of the verbs happened first in a chronological order.
 More specifically, you need to return for each pair of verbs a single label out of the four potential labels:
 BEFORE - the first verb happened before the second.

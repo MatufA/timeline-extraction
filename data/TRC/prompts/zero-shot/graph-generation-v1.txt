@@ -1,11 +1,13 @@
 Task Overview:
-You are given a text, in which some verbs are uniquely marked by e[NUMBER] (e.g., e[1], e[2]). Your task is to say which of the verbs happened first in a chronological order. More specifically, you need to return for each pair of verbs a single label out of the four potential labels:
+You are given a text, in which some verbs are uniquely marked by ei[NUMBER] (e.g., ei[1], ei[2]).
+Your task is to say which of the verbs happened first in a chronological order.
+More specifically, you need to return for each pair of verbs a single label out of the four potential labels:
 BEFORE - the first verb happened before the second.
 AFTER - the first verb happened after the second.
 EQUAL - both verbs happened together.
 VAGUE - It is impossible to know based on the context provided.
 
-Analyze the verbs in the text and determine the temporal relations between each pair of verbs annotated with e[NUMBER]:[VERB].
+Analyze the verbs in the text and determine the temporal relations between each pair of verbs annotated with ei[NUMBER]:[VERB].
 
 Only consider verbs that are relatively close to each other in the text. we consider two verbs to be close to each other if they are no more then two sentences apart.
 
@@ -21,10 +23,10 @@ Text for Analysis:
 
 Output Format:
 For each pair of verbs, provide the temporal relation as:
-- e1 BEFORE e2
-- e1 AFTER e2
-- e1 VAGUE e2
-if e1 BEFORE e2 and e2 BEFORE e3 don't write e1 BEFORE e3.
+- ei1 BEFORE ei2
+- ei1 AFTER ei2
+- ei1 VAGUE ei2
+if ei1 BEFORE ei2 and ei2 BEFORE ei3 don't write ei1 BEFORE ei3.
 
 Provide ONLY the final answer and verify the output.
 

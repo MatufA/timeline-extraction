@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from full_temporal_relation.data.preprocessing import load_data
 from full_temporal_relation.graph import Graph
 
 
@@ -12,7 +13,7 @@ def summary_results(model_results_path: Path, gold_df: pd.DataFrame, model_name:
     preds_df = (
         df__results[['docid', 'unique_id', 'relation_selected', 'p_label']]
         .copy()
-        .dropna()
+        .dropna(axis='rows')
         .drop_duplicates(['docid', 'unique_id', 'relation_selected'])
         .rename({'relation_selected': 'relation'}, axis='columns'))
 
@@ -69,7 +70,7 @@ def relation_table(gold_df, preds_df, model_name, target_col='relation'):
         relevant_gold_df = pd.merge(relevant_preds_df, group[['docid', 'unique_id', target_col]], how='inner',
                                     on=['docid', 'unique_id'])
         group_value_counts = relevant_gold_df.p_label.value_counts()
-        group_value_counts['no_predictions'] = no_preds_df[relation]
+        group_value_counts['no_predictions'] = no_preds_df[relation] if relation in no_preds_df else 0
         results.loc[relation] = group_value_counts
 
     results.loc['no_label'] = no_label_df
@@ -175,27 +176,34 @@ def get_n_graph_cycles(df: pd.DataFrame) -> dict:
 
 
 if __name__ == '__main__':
-    model_name = 'llama-3.1-70b-versatile'
+    # model_name = 'llama-3.1-70b-versatile'
     # model_name = 'gemini-1.5-pro'
     # model_name = 'gemini-1.5-flash'
-    method = 'zero-shot'  #'few-shot'
+    method = 'few-shot'  #  'zero-shot'
+    mode = 'multi'  # 'pair'
+    data_name = 'te3-platinum'
+    model_name = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    suffixes = [model_name.split('/')[1] if '/' in model_name else model_name, method]
+    suffix_name = '-'.join(suffixes)
 
     MATRES_DATA_PATH = Path('../data')
     TRC_RAW_PATH = MATRES_DATA_PATH / 'TRC'
-    parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / method / f'platinum-test-results-{model_name}.csv'
+    # parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / method / f'platinum-test-results-{model_name}.csv'
+    parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / method / f'{mode}-{data_name}-results-{suffix_name}.csv'
     gold_data_path = MATRES_DATA_PATH / 'MATRES' / 'platinum.txt'
     results_path = TRC_RAW_PATH / 'results' / method / f'platinum-results-{model_name}.csv'
     min_vote = 3
 
     predicted_df = pd.read_csv(parsed_response_path)
+    platinum_df = load_data(gold_data_path)
 
-    platinum_df = pd.read_csv(gold_data_path, sep='\t', header=None,
-                              names=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2', 'relation'])
-    platinum_df.eiid1 = 'e' + platinum_df.eiid1.astype(str)
-    platinum_df.eiid2 = 'e' + platinum_df.eiid2.astype(str)
-
-    eiid1_eiid2 = list(zip(platinum_df['eiid1'], platinum_df['eiid2']))
-    platinum_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
+    # platinum_df = pd.read_csv(gold_data_path, sep='\t', header=None,
+    #                           names=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2', 'relation'])
+    # platinum_df.eiid1 = 'ei' + platinum_df.eiid1.astype(str)
+    # platinum_df.eiid2 = 'ei' + platinum_df.eiid2.astype(str)
+    #
+    # eiid1_eiid2 = list(zip(platinum_df['eiid1'], platinum_df['eiid2']))
+    # platinum_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
 
     predicted_df['score'] = 1
     predicted_sum_df = predicted_df.groupby(['docid', 'unique_id', 'relation'])['score'].sum().reset_index()
