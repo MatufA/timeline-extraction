@@ -48,7 +48,7 @@ class LLModel(abc.ABC):
 
                     res = self.prepare_response(response)
                     res['text'] = record['text']
-                    res['prompt'] = record['prompt']
+                    res['prompt'] = prompt
                     res['doc_id'] = record['doc_id']
                     res['trail'] = trail
                     json_line = json.dumps(res)

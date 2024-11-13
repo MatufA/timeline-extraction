@@ -19,14 +19,12 @@ from full_temporal_relation.visualization.graph import draw_directed_graph
 from full_temporal_relation.data.preprocessing import load_data, Doc
 from full_temporal_relation.graph import Graph, create_simple_graph
 
-
-def main(model_name: str, method: str, model: LLModel, prompt_filename: str,  prompt_params: List[str],
-         raw_text_name: str, suffix_path: str = ''):
-    DATA_PATH = Path('./data')
-
-    MATRES_DATA_PATH = DATA_PATH / 'MATRES'
-    PLATINUM_RAW = MATRES_DATA_PATH / 'raw' / 'TBAQ-cleaned' / 'te3-platinum'
-    gold_data_path = MATRES_DATA_PATH / 'platinum.txt'
+DATA_PATH = Path('./data')
+MATRES_DATA_PATH = DATA_PATH / 'MATRES'
+PLATINUM_RAW = MATRES_DATA_PATH / 'raw' / 'TBAQ-cleaned' / 'te3-platinum'
+gold_data_path = MATRES_DATA_PATH / 'platinum.txt'
+TRC_RAW_PATH = DATA_PATH / 'TRC'
+TRC_RESULTS_PATH = TRC_RAW_PATH / 'results'
 
 def generate_suffix_name(model_name: str, method: str, suffix_path: str):
     suffixes = [model_name.split('/')[1] if '/' in model_name else model_name, method]
@@ -43,10 +41,10 @@ def main(model_name: str, method: str, model: LLModel, prompt_filename: str,  pr
     results_path = TRC_RAW_PATH / 'results' / method / f'{mode}-{data_name}results-{suffix_name}.csv'
 
     # Generate model and response
-    # model.generate_responses(text_path=TRC_RAW_PATH / 'raw_text' / raw_text_name,
-    #                          prompt_path=TRC_RAW_PATH / 'prompts' / method / prompt_filename,
-    #                          results_path=llm_response_path,
-    #                          prompt_params=prompt_params)
+    model.generate_responses(text_path=TRC_RAW_PATH / 'raw_text' / raw_text_name,
+                             prompt_path=TRC_RAW_PATH / 'prompts' / method / prompt_filename,
+                             results_path=llm_response_path,
+                             prompt_params=prompt_params)
 
     all_parsed_response_df = pd.DataFrame(columns=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2',
                                                    'relation', 'unique_id', 'model_name',
@@ -91,13 +89,12 @@ def get_summary_results(model_name: str, method: str, labeled_path: Path, result
     df['suffix_path'] = suffix_path
     df['model_name'] = model_name
     return df
-    # except KeyError as e:
-    #     logging.warning(f'No results for {result_file_suffix}, probably old format, error: {e}')
-    # except FileNotFoundError as e:
-    #     logging.warning(f'No results for {result_file_suffix}, experiment results not been found')
 
 
 if __name__ == '__main__':
+    gpu_device = 1
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
+
     BASE_NAMES = ['AQUAINT', 'TimeBank', 'te3-platinum']
     BASE_DF_PATHS = ['aquaint.txt', 'timebank.txt', 'platinum.txt']
 
@@ -106,9 +103,6 @@ if __name__ == '__main__':
 
     mode = 'pair'
     # mode = 'multi'
-
-    gpu_device = 1
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
 
     method = 'zero-shot'
     # method = 'few-shot'
