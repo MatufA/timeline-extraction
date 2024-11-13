@@ -1,6 +1,7 @@
+import json
 import logging
 import re
-from typing import Union
+from typing import Union, Literal
 
 import numpy as np
 import pandas as pd
@@ -24,7 +25,7 @@ def load_data(paht: Union[str, Path]) -> pd.DataFrame:
 
     return df
 
-def generate_training_dataset(gold_df: pd.DataFrame, docs_dir: Union[str, Path]) -> pd.DataFrame:
+def generate_training_dataset(gold_df: pd.DataFrame, docs_dir: Union[str, Path], mode: str) -> pd.DataFrame:
     docs = [Doc(path) for path in Path(docs_dir).glob('*.tml')]
 
     doc_relations = []
@@ -42,7 +43,8 @@ def generate_training_dataset(gold_df: pd.DataFrame, docs_dir: Union[str, Path])
                 indexes = np.repeat(idx, len(ids_groups))
                 event_dict.update(dict(zip(ids_groups, indexes)))
 
-        plain_text_lines = re.sub(r'ei\d+:(\w+)\s*', r'\1 ', doc.get_text()).split('\n\n')
+        # plain_text_lines = re.sub(r'ei\d+:(\w+)\s*', r'\1 ', doc.get_text()).split('\n\n')
+        plain_text_lines = doc.get_text().split('\n\n')
 
         for idx, row in doc_relation.iterrows():
             if row['eiid1'] not in event_dict:
@@ -56,32 +58,43 @@ def generate_training_dataset(gold_df: pd.DataFrame, docs_dir: Union[str, Path])
             e1_index = event_dict[row['eiid1']]
             e2_index = event_dict[row['eiid2']]
 
-            if e1_index != e2_index:
-                min_idx = min(e1_index, e2_index)
-                max_idx = max(e1_index, e2_index)
+            if mode == 'pair':
+                if e1_index != e2_index:
+                    min_idx = min(e1_index, e2_index)
+                    max_idx = max(e1_index, e2_index)
 
-                doc_relation.at[idx, 'text'] = '\n'.join(plain_text_lines[min_idx: max_idx+1])
-            else:
-                doc_relation.at[idx, 'text'] = plain_text_lines[e1_index]
-
-        # prev_idx = 0
-        # for idx in range(2, len(lines) + 1):
-        #     tuple_lines = lines[prev_idx:idx]
-        #     text = '\n'.join(tuple_lines)
-        #
-        #     prev_idx = idx - 1
-        #
-        #     ids_groups = re.findall(r'(e\d+):\w+\s+', text)
-        #     if len(ids_groups) < 2:
-        #         continue
-        #
-        #     mask = doc_relation.eiid1.isin(ids_groups) & doc_relation.eiid2.isin(ids_groups) & doc_relation.text.isna()
-        #     if not doc_relation[mask].empty:
-        #         doc_relation.loc[mask, 'text'] = text
+                    doc_relation.at[idx, 'text'] = '\n'.join(plain_text_lines[min_idx: max_idx+1])
+                else:
+                    doc_relation.at[idx, 'text'] = plain_text_lines[e1_index]
+            elif mode == 'multi':
+                doc_relation.at[idx, 'text'] = '\n'.join(plain_text_lines)
 
         doc_relations.append(doc_relation)
 
     return pd.concat(doc_relations, ignore_index=True).dropna(subset='text')
+
+def prepare_as_jsonl(df: pd.DataFrame, output_path: Path, mode: Literal['multi', 'pair']) -> None:
+
+    data = []
+
+    if mode == 'pair':
+        for idx, row in df.iterrows():
+            data.append({
+                'text': row.text,
+                'relations': f'{row.eiid1} [RELATION] {row.eiid2}',
+                'doc_id': row.docid
+            })
+    else:
+        for doc_id, group in df.groupby('docid'):
+            relations = '\n'.join(group.loc[:, ['eiid1', 'eiid2']].apply(lambda row: ' [RELATION] '.join(row), axis=1))
+            data.append({
+                'text': group.iloc[0].text,
+                'relations': relations,
+                'doc_id': doc_id
+            })
+
+    output_path.write_text(json.dumps(data, indent=2))
+
 
 class Doc:
     def __init__(self, path: Path):
@@ -98,8 +111,11 @@ class Doc:
         return BeautifulSoup(data, features='lxml')
 
     def get_mapping(self):
-        # text = self.doc.find(name="MAKEINSTANCE")
-        return {d.get("eventid"): d.get("eiid") for d in self.doc.find_all('makeinstance')}
+        eid_mapping = {}
+        for d in self.doc.find_all('makeinstance'):
+            if d.get("eventid") not in eid_mapping:
+                eid_mapping[d.get("eventid")] = d.get("eiid")
+        return eid_mapping
 
     def get_text(self):
         text = self.doc.find(name="text")
@@ -127,11 +143,26 @@ if __name__ == '__main__':
 
     BASE_NAMES = ['AQUAINT', 'TimeBank', 'te3-platinum']
     BASE_DF_PATHS = ['aquaint.txt', 'timebank.txt', 'platinum.txt']
+    # mode = 'pair'
+    mode = 'multi'
+
+    if mode == 'pair':
+        output = DATA_PATH / 'trc-prepared-data'
+    elif mode == 'multi':
+        output = DATA_PATH / 'te-prepared-data'
 
     for name, df_name in zip(BASE_NAMES, BASE_DF_PATHS):
-        gold_df = load_data(MATRES_PATH / df_name)
+        output_file = output / f'{mode}-{name}.csv'
 
-        df = generate_training_dataset(gold_df, docs_dir=DOCS_DIRS_PATH / name)
-        output = DATA_PATH / 'trc-prepared-data'
-        output.mkdir(exist_ok=True)
-        df.to_csv(output / f'{name}.csv', index=False)
+        if not output_file.exists():
+            gold_df = load_data(MATRES_PATH / df_name)
+            df = generate_training_dataset(gold_df, docs_dir=DOCS_DIRS_PATH / name, mode=mode)
+            output.mkdir(exist_ok=True)
+            df.to_csv(output_file, index=False)
+        else:
+            df = pd.read_csv(output_file, header=0)
+            print(f"Data already exists for {name}. Skipping.")
+
+        prepare_as_jsonl(df,
+                         output_path=DATA_PATH/'TRC'/'raw_text'/f'{mode}_{name.lower()}_text_w_relations_prepared.json',
+                         mode=mode)

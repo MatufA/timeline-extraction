@@ -8,8 +8,9 @@ from full_temporal_relation.data.preprocessing import Doc, load_data
 from full_temporal_relation.metrics import get_n_graph_cycles
 
 
-def prepare_df_from_response(response: str, doc_obj: Doc):
+def prepare_df_from_response(response: str, doc_obj: Doc, mode: str):
     supported_relations = ('before', 'after', 'equal', 'vague')
+    ei_keys = set(doc_obj.mapping.values())
     data = []
     for line in response.strip().splitlines():
         e1e2_opt = re.search(r'e.*', line)
@@ -18,13 +19,13 @@ def prepare_df_from_response(response: str, doc_obj: Doc):
 
         e1e2 = e1e2_opt.group(0).strip()
 
-        regex_parsers = [r'(e\d+):\w+\s+(\w+)\s+(e\d+).*',
-                         r'(e\d+)\s+(\w+)\s+(e\d+).*',
-                         r'(e\d+)\s+\w+\s+(\w+)\s+(e\d+).*',
-                         r'(e\d+):(\w+)\s+(e\d+).*',
-                         r'(e\[\d+\])\s+(\w+)\s+(e\[\d+\]).*',
-                         r'(e\d+)\s+\[\w+\]\s+(e\d+):\s+(\w+)',
-                         r'(e\d+)\s+\[(\w+)\]\s+(e\d+)'
+        regex_parsers = [r'(ei\d+):\w+\s+(\w+)\s+(ei\d+).*',
+                         r'(ei\d+)\s+(\w+)\s+(ei\d+).*',
+                         r'(ei\d+)\s+\w+\s+(\w+)\s+(ei\d+).*',
+                         r'(ei\d+):(\w+)\s+(ei\d+).*',
+                         r'(ei\[\d+\])\s+(\w+)\s+(ei\[\d+\]).*',
+                         r'(ei\d+)\s+\[\w+\]\s+(ei\d+):\s+(\w+)',
+                         r'(ei\d+)\s+\[(\w+)\]\s+(ei\d+)'
                          ]
 
         e1_relation_e2 = None
@@ -48,17 +49,17 @@ def prepare_df_from_response(response: str, doc_obj: Doc):
             else:
                 continue
 
-        if e1 not in doc_obj.mapping or e2 not in doc_obj.mapping:
+        if e1 not in ei_keys or e2 not in ei_keys:
             unique_id = 'UNDEFINED'
-            verb1 = doc_obj.mapping.get(e1)
-            verb2 = doc_obj.mapping.get(e2)
+            # verb1 = doc_obj.mapping.get(e1)
+            # verb2 = doc_obj.mapping.get(e2)
         else:
             unique_id = '-'.join(sorted([e1, e2]))
-            verb1 = doc_obj.mapping[e1]
-            verb2 = doc_obj.mapping[e2]
+            # verb1 = doc_obj.mapping[e1]
+            # verb2 = doc_obj.mapping[e2]
 
         if relation == 'after':
-            verb1, verb2 = verb2, verb1
+            # verb1, verb2 = verb2, verb1
             e1, e2 = e2, e1
             label = 'after'
             relation = 'before'
@@ -67,13 +68,14 @@ def prepare_df_from_response(response: str, doc_obj: Doc):
 
         data.append({
             'docid': doc_obj.docid,
-            'verb1': verb1,
-            'verb2': verb2,
+            # 'verb1': verb1,
+            # 'verb2': verb2,
             'eiid1': e1.strip(),
             'eiid2': e2.strip(),
             'relation': relation,
             'unique_id': unique_id,
-            'p_label': label.upper()
+            'p_label': label.upper(),
+            'mode': mode
         })
     return pd.DataFrame(data)
 
@@ -86,17 +88,12 @@ def transform_to_before(df, doc_id):
     return doc_events
 
 
-def majority_vote_decision(parsed_response_path: Path, gold_data_path: Path, results_path: Path, min_votes: int = 3):
+def majority_vote_decision(parsed_response_path: Path, results_path: Path, min_votes: int = 3):
     predicted_df = pd.read_csv(parsed_response_path)
-    # gold_before_only_df = load_data(gold_data_path)
-    # gold_df = load_data(gold_data_path)
-
-    # eiid1_eiid2 = list(zip(gold_before_only_df['eiid1'], gold_before_only_df['eiid2']))
-    # gold_before_only_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
 
     predicted_df['score'] = 1
     predicted_sum_df = predicted_df.groupby(['docid', 'unique_id', 'relation'])['score'].sum().reset_index()
-    predicted_sum_df = predicted_sum_df[predicted_sum_df['score'] > min_votes]
+    predicted_sum_df = predicted_sum_df[predicted_sum_df['score'] >= min_votes]
 
     agg_preds = []
     for (docid, unique_id), group in predicted_sum_df.groupby(['docid', 'unique_id']):
