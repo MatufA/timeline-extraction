@@ -1,9 +1,9 @@
 import os
 from typing import Union
 
-from transformers import AutoTokenizer
-import transformers
 import torch
+import transformers
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
 def load_llama_model(path: Union[str, os.PathLike]):
@@ -12,14 +12,14 @@ def load_llama_model(path: Union[str, os.PathLike]):
         "text-generation",
         model=model,
         torch_dtype=torch.float16,
-        device_map="auto",
+        device_map="cpu",
     )
     return pipeline, tokenizer
 
 
 if __name__ == '__main__':
 
-    model = "meta-llama/Meta-Llama-3.1-70B-Instruct"
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # pipeline, tokenizer = load_llama_model(model)
     #
     # sequences = pipeline(
@@ -34,6 +34,9 @@ if __name__ == '__main__':
     # for seq in sequences:
     #     print(f"Result: {seq['generated_text']}")
 
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-70B-Instruct")
+    # Load model directly
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name)
     tokens = tokenizer.tokenize("hello how are you today?")
     print(len(tokens))
