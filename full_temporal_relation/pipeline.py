@@ -1,13 +1,15 @@
+import os
 from typing import List
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
+from full_temporal_relation.models.HuggingFaceClient import HuggingfaceClient
 from full_temporal_relation.models.LLModel import LLModel
-from full_temporal_relation.models.TogetherAIClient import TogetherAIClient
-from full_temporal_relation.models.gemini import Gemini
-from full_temporal_relation.models.llama3 import GroqModel
+# from full_temporal_relation.models.TogetherAIClient import TogetherAIClient
+# from full_temporal_relation.models.gemini import Gemini
+# from full_temporal_relation.models.llama3 import GroqModel
 from full_temporal_relation.data.postprocessing import prepare_df_from_response, majority_vote_decision
 from full_temporal_relation.visualization.graph import draw_directed_graph
 from full_temporal_relation.data.preprocessing import load_data, Doc
@@ -16,9 +18,9 @@ from full_temporal_relation.graph import Graph, create_simple_graph
 
 def main(model_name: str, method: str, model: LLModel, prompt_filename: str,  prompt_params: List[str],
          raw_text_name: str, suffix_path: str = ''):
-    DATA_PATH = Path('../data')
+    DATA_PATH = Path('./data')
 
-    MATRES_DATA_PATH = Path('../data') / 'MATRES'
+    MATRES_DATA_PATH = DATA_PATH / 'MATRES'
     PLATINUM_RAW = MATRES_DATA_PATH / 'raw' / 'TBAQ-cleaned' / 'te3-platinum'
     gold_data_path = MATRES_DATA_PATH / 'platinum.txt'
 
@@ -60,16 +62,19 @@ def main(model_name: str, method: str, model: LLModel, prompt_filename: str,  pr
 
 
 if __name__ == '__main__':
+    gpu_device = 1
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
+
     method = 'zero-shot'
     # method = 'few-shot'
 
-    # prompt_filename = 'graph-generation-v1.txt'
-    # prompt_params = ['text']
-    # suffix_path = ''
+    prompt_filename = 'graph-generation-v1.txt'
+    prompt_params = ['text']
+    suffix_path = ''
 
-    prompt_filename = 'graph-generation-v2.txt'
-    prompt_params = ['text', 'relations']
-    suffix_path = 'completion'
+    # prompt_filename = 'graph-generation-v2.txt'
+    # prompt_params = ['text', 'relations']
+    # suffix_path = 'completion'
 
     # prompt_filename = 'graph-generation-v3.txt'
     # prompt_params = ['text', 'relations']
@@ -85,8 +90,11 @@ if __name__ == '__main__':
     # model_name = 'gemini-1.5-flash'
     # model = Gemini(model_name, n_trails=5)
 
-    model_name = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
-    model = TogetherAIClient(model_name)
+    # model_name = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    # model = TogetherAIClient(model_name)
+
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    model = HuggingfaceClient(model_name=model_name, device=gpu_device)
 
     main(model_name, method, model, prompt_filename, prompt_params,
          raw_text_name=raw_text_name, suffix_path=suffix_path)
