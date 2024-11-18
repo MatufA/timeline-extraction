@@ -39,7 +39,7 @@ class LLModel(abc.ABC):
         #         doc_iter = records_partial_df.doc_id.unique()
         #         records = (record for record in records if record['doc_id'] not in doc_iter)
 
-        with results_path.open('a') as file:
+        with results_path.open('w') as file:
             for record in tqdm(records, desc='Text evaluation', position=0, leave=True):
                 for trail in trange(self.n_trails, desc=f'Processing record: {record["doc_id"]}',
                                     position=1, leave=False):

@@ -26,7 +26,8 @@ class HuggingfaceClient(LLModel):
                     "role": "user",
                     "content": prompt,
                 }
-            ], max_new_tokens=2000
+            ], max_new_tokens=500
+            , pad_token_id=self.pipe.tokenizer.eos_token_id
         )
 
     def prepare_response(self, response):
@@ -37,4 +38,4 @@ class HuggingfaceClient(LLModel):
 
 if __name__ == '__main__':
     model_name = "meta-llama/Llama-3.1-8B-Instruct"
-    model = HuggingfaceClient(model_name=model_name)
+    # model = HuggingfaceClient(model_name=model_name)

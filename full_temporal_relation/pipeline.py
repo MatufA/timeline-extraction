@@ -18,6 +18,7 @@ from full_temporal_relation.data.postprocessing import prepare_df_from_response,
 from full_temporal_relation.visualization.graph import draw_directed_graph
 from full_temporal_relation.data.preprocessing import load_data, Doc
 from full_temporal_relation.graph import Graph, create_simple_graph
+from prompts.Prompt import Prompt
 
 DATA_PATH = Path('./data')
 MATRES_DATA_PATH = DATA_PATH / 'MATRES'
@@ -107,17 +108,20 @@ if __name__ == '__main__':
     method = 'zero-shot'
     # method = 'few-shot'
 
-    prompt_filename = 'graph-generation-v1.txt'
-    prompt_params = ['text']
-    suffix_path = ''
+    # prompt_filename = 'graph-generation-v1.txt'
+    # prompt_params = ['text']
+    # suffix_path = ''
+    # prompt = Prompt()
 
     # prompt_filename = 'graph-generation-v2.txt'
-    # prompt_params = ['text', 'relations']
-    # suffix_path = 'completion'
+    prompt_params = ['text', 'relations']
+    suffix_path = 'completion'
+    prompt = Prompt(use_few_shot=True)
 
     # prompt_filename = 'graph-generation-v3.txt'
     # prompt_params = ['text', 'relations']
     # suffix_path = 'completion-explanation'
+    prompt = Prompt(use_few_shot=True, provide_justification=True)
 
     # raw_text_name = 'platinum_text_prepared.json'
     # raw_text_name = 'platinum_text_w_relations_prepared.json'
