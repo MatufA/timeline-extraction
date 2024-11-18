@@ -6,4 +6,4 @@ networkx
 lxml
 google-generativeai
 tiktoken
-sklearn
+scikit-learn
