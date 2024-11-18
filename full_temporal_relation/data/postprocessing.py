@@ -25,7 +25,8 @@ def prepare_df_from_response(response: str, doc_obj: Doc, mode: str):
                          r'(ei\d+):(\w+)\s+(ei\d+).*',
                          r'(ei\[\d+\])\s+(\w+)\s+(ei\[\d+\]).*',
                          r'(ei\d+)\s+\[\w+\]\s+(ei\d+):\s+(\w+)',
-                         r'(ei\d+)\s+\[(\w+)\]\s+(ei\d+)'
+                         r'(ei\d+)\s+\[(\w+)\]\s+(ei\d+)',
+                         r'(ei\d+):\s*\w+\s+(\w+)\s+(ei\d+).*',
                          ]
 
         e1_relation_e2 = None
