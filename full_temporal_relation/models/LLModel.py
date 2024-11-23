@@ -7,6 +7,8 @@ from time import sleep
 from pathlib import Path
 from tqdm.auto import tqdm, trange
 
+from prompts.Prompt import Prompt
+
 
 class LLModel(abc.ABC):
     def __init__(self, model, each_trail: bool = False, each_doc: bool = True, n_trails: int = 5):
@@ -23,13 +25,25 @@ class LLModel(abc.ABC):
     def prepare_response(self, response):
         pass
 
-    def generate_responses(self, text_path: Path, prompt_path: Path,
-                           results_path: Path, prompt_params: List[str] = None):
+    def generate_responses(self, text_path: Path, results_path: Path, prompt_template: Prompt, 
+                           prompt_params: List[str] = None):
         if prompt_params is None:
             prompt_params = ['text']
 
         records = json.load(text_path.open('r'))
-        prompt_template = prompt_path.open('r').read()
+
+        if 'relations' in prompt_params:
+            for record in records:
+                rels = []
+                for rel in record['relations'].split('\n'):
+                    e1, e2 = rel.split(' [RELATION] ')
+                    e1, e2 = e1.strip(), e2.strip()
+                    # rels.append(json.dumps({"event1": e1, "event2": e2}))
+                    rels.append(f'{e1} {e2}')
+                record['relations'] = '\n'.join(rels)
+
+
+        # prompt_template = prompt_path.open('r').read()
 
         # if results_path.exists():
         #     records_partial_df: pd.DataFrame = pd.read_json(results_path, lines=True)
@@ -43,11 +57,11 @@ class LLModel(abc.ABC):
             for record in tqdm(records, desc='Text evaluation', position=0, leave=True):
                 for trail in trange(self.n_trails, desc=f'Processing record: {record["doc_id"]}',
                                     position=1, leave=False):
-                    prompt = prompt_template.format(**{p: record[p] for p in prompt_params})
+                    # prompt = prompt_template.format(**{p: record[p] for p in prompt_params})
+                    prompt = prompt_template.generate_dict_prompt(**{p: record[p] for p in prompt_params})
                     response = self.generate_response(prompt)
 
                     res = self.prepare_response(response)
-                    res['text'] = record['text']
                     res['prompt'] = prompt
                     res['doc_id'] = record['doc_id']
                     res['trail'] = trail

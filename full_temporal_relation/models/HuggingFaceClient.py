@@ -1,3 +1,4 @@
+import json
 import torch
 from full_temporal_relation.models.LLModel import LLModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -20,19 +21,21 @@ class HuggingfaceClient(LLModel):
                              device=device)
 
     def generate_response(self, prompt):
-        return self.pipe(
-            [
+        messages = [
                 {
                     "role": "user",
                     "content": prompt,
                 }
-            ], max_new_tokens=500
+            ] if isinstance(prompt, str) else prompt
+        return self.pipe(
+            messages
+            , max_new_tokens=500
             , pad_token_id=self.pipe.tokenizer.eos_token_id
         )
 
     def prepare_response(self, response):
         return {
-            'response': response[0]['generated_text'][1]['content']
+            'response': json.loads(response[0]['generated_text'][-1]['content'])
         }
 
 
