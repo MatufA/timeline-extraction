@@ -33,8 +33,8 @@ def generate_suffix_name(model_name: str, method: str, suffix_path: str):
         suffixes.append(suffix_path)
     return '-'.join(suffixes)
 
-def main(model_name: str, method: str, model: LLModel, prompt_filename: str,  prompt_params: List[str],
-         raw_text_name: str, data_name: str, suffix_path: str = '', mode: str = 'multi'):
+def main(model_name: str, method: str, model: LLModel,  prompt_params: List[str],
+         raw_text_name: str, data_name: str, prompt: Prompt, suffix_path: str = '', mode: str = 'multi'):
     suffix_name = generate_suffix_name(model_name, method, suffix_path)
 
     llm_response_path = TRC_RAW_PATH / 'llm_response' / method / f'{mode}-{data_name}-{suffix_name}.jsonl'
@@ -43,22 +43,24 @@ def main(model_name: str, method: str, model: LLModel, prompt_filename: str,  pr
 
     # Generate model and response
     model.generate_responses(text_path=TRC_RAW_PATH / 'raw_text' / raw_text_name,
-                             prompt_path=TRC_RAW_PATH / 'prompts' / method / prompt_filename,
+                            #  prompt_path=TRC_RAW_PATH / 'prompts' / method / prompt_filename,
                              results_path=llm_response_path,
-                             prompt_params=prompt_params)
+                             prompt_params=prompt_params, 
+                             prompt_template=prompt)
 
     all_parsed_response_df = pd.DataFrame(columns=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2',
                                                    'relation', 'unique_id', 'model_name',
                                                    'p_label', 'mode']).astype({'unique_id': str})
 
-    if mode == 'pair':
-        records = json.load((TRC_RAW_PATH / 'raw_text' / raw_text_name).open('r'))
-        responses = pd.read_json(llm_response_path, lines=True).to_dict(orient='records')
-        for (record, response) in zip(records, responses):
-            response['response'] = record['relations'].replace('[RELATION]', response['response'].split('\n\n')[0])
-        results_df = pd.DataFrame.from_dict(responses)
-    else:
-        results_df = pd.read_json(llm_response_path, lines=True)
+    # if mode == 'pair':
+    #     records = json.load((TRC_RAW_PATH / 'raw_text' / raw_text_name).open('r'))
+    #     responses = pd.read_json(llm_response_path, lines=True).to_dict(orient='records')
+    #     for (record, response) in zip(records, responses):
+    #         response['response'] = record['relations'].replace('[RELATION]', response['response'].split('\n\n')[0])
+    #     results_df = pd.DataFrame.from_dict(responses)
+    # else:
+    #     results_df = pd.read_json(llm_response_path, lines=True)
+    results_df = pd.read_json(llm_response_path, lines=True)
 
     for doc_id, group in results_df.groupby('doc_id'):
         doc = Doc(PLATINUM_RAW / f'{doc_id}.tml')
@@ -105,23 +107,24 @@ if __name__ == '__main__':
     mode = 'pair'
     # mode = 'multi'
 
-    method = 'zero-shot'
-    # method = 'few-shot'
+    # method = 'zero-shot'
+    method = 'few-shot'
 
     # prompt_filename = 'graph-generation-v1.txt'
     # prompt_params = ['text']
     # suffix_path = ''
     # prompt = Prompt()
+    # prompt = Prompt()
 
     # prompt_filename = 'graph-generation-v2.txt'
     prompt_params = ['text', 'relations']
     suffix_path = 'completion'
-    prompt = Prompt(use_few_shot=True)
+    prompt = Prompt(use_few_shot=True, use_completion=True)
 
     # prompt_filename = 'graph-generation-v3.txt'
     # prompt_params = ['text', 'relations']
     # suffix_path = 'completion-explanation'
-    prompt = Prompt(use_few_shot=True, provide_justification=True)
+    # prompt = Prompt(use_few_shot=True, provide_justification=True, use_completion=True)
 
     # raw_text_name = 'platinum_text_prepared.json'
     # raw_text_name = 'platinum_text_w_relations_prepared.json'
@@ -146,8 +149,8 @@ if __name__ == '__main__':
     test - platinum.txt
     """
 
-    results_path = main(model_name, method, model, prompt_filename, prompt_params,
-         raw_text_name=raw_text_name, suffix_path=suffix_path, data_name=name, mode=mode)
+    results_path = main(model_name, method, model, prompt_params,
+         raw_text_name=raw_text_name, suffix_path=suffix_path, data_name=name, mode=mode, prompt=prompt)
 
     results_df = get_summary_results(model_name, method,
                                   labeled_path=MATRES_DATA_PATH / labeled_df_name,
