@@ -3,7 +3,7 @@ from typing import Optional
 
 
 class Prompt:
-    def __init__(self, use_vague = True, use_few_shot: bool = False, provide_justification: bool = False):
+    def __init__(self, use_vague = True, use_few_shot: bool = False, provide_justification: bool = False, use_completion: bool = False):
         self.use_vague = use_vague
         self.use_few_shot = use_few_shot
         self.provide_justification = provide_justification
@@ -19,10 +19,11 @@ class Prompt:
         equal - both verbs happened together.
         {"vague - It is impossible to know based on the context provided" if self.use_vague else ""}
         
+        DON'T write duplications, if ei1 before ei2 and ei2 before ei3 don't write ei1 before ei3.
 
         The output format should be valid json (list of relation), with the following keys:
-        source - the first relation, should be the lower #ID
-        target - teh second relation, should be the higher #ID
+        event1 - the first relation, should be the lower #ID
+        event2 - teh second relation, should be the higher #ID
         relation - the relation classification from the listed potential labels above 
         """
 
@@ -48,8 +49,7 @@ class Prompt:
         ---
         """
 
-        self.instruction = """replace the [RELATION] with the right label: \n{relations}"""
-        self.justification = """ """
+        self.instruction = """for every tuple of events (event1 and event2) generate only your final answer: \n{relations}""" if use_completion else """the list of pairs are:"""
 
     def generate_prompt(self, text: str, relations: Optional[str] = None):
         assert text is not None, "text not provided"
@@ -57,18 +57,18 @@ class Prompt:
         full_prompt = self.system
         few_shot_examples = """
                 [
-                {"source":"1", "target":"2", "relation": "before"},
-                {"source":"3", "target":"12", "relation": "after"},
-                {"source":"4", "target":"5", "relation": "vague"},
+                {"event1":"1", "event2":"2", "relation": "before"},
+                {"event1":"3", "event2":"12", "relation": "after"},
+                {"event1":"4", "event2":"5", "relation": "vague"},
                 ] """
 
         if self.provide_justification:
             full_prompt = full_prompt + "\njustification - justify your classification from the provided text, explain in one short sentences"
             few_shot_examples = """
                 [
-                {"source":"1", "target":"2", "relation": "before", "justification": "since exploded happened before killing"},
-                {"source":"3", "target":"12", "relation": "after", "justification": "said happened before injured"},
-                {"source":"4", "target":"5", "relation": "vague", "justification": "a local TV said happened before a U.S. Embassy official in Nairobi said"},
+                {"event1":"1", "event2":"2", "relation": "before", "justification": "since exploded happened before killing"},
+                {"event1":"3", "event2":"12", "relation": "after", "justification": "said happened before injured"},
+                {"event1":"4", "event2":"5", "relation": "vague", "justification": "a local TV said happened before a U.S. Embassy official in Nairobi said"},
                 ] """
         
         if self.use_few_shot:
@@ -77,3 +77,35 @@ class Prompt:
         context = self.context.format(text=text)
         instruction = self.instruction.format(relations=relations)
         return f"""{full_prompt} \n{context} \n{instruction}"""
+    
+    def generate_dict_prompt(self, text: str, relations: Optional[str] = None):
+        assert text is not None, "text not provided"
+
+        system_content = self.system
+        few_shot_examples = """
+                [
+                {"event1":"1", "event2":"2", "relation": "before"},
+                {"event1":"3", "event2":"12", "relation": "after"},
+                {"event1":"4", "event2":"5", "relation": "vague"},
+                ] """
+
+        if self.provide_justification:
+            system_content = system_content + "\njustification - justify your classification from the provided text, explain in one short sentences"
+            few_shot_examples = """
+                [
+                {"event1":"1", "event2":"2", "relation": "before", "justification": "since exploded happened before killing"},
+                {"event1":"3", "event2":"12", "relation": "after", "justification": "said happened before injured"},
+                {"event1":"4", "event2":"5", "relation": "vague", "justification": "a local TV said happened before a U.S. Embassy official in Nairobi said"},
+                ] """
+        
+        if self.use_few_shot:
+            system_content = f"{system_content} \n{self.few_shot.format(examples=few_shot_examples)}"
+
+        context = self.context.format(text=text)
+        instruction = self.instruction.format(relations=relations)
+
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": f"{context}\n{instruction}"},
+        ]
+    
