@@ -1,12 +1,28 @@
+import re
 import json
 import logging
-import re
 from typing import Union, Literal
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from bs4 import BeautifulSoup
+
+def replace_eid(text, exclude_ids):
+    pattern = r'ei(\d+):(\w+)'
+    
+    def replace_func(match):
+        ei_id = match.group(1)
+        word = match.group(2)
+        
+        if f'ei{ei_id}' in exclude_ids:
+            return f'[EVENT{ei_id}]{word}[/EVENT{ei_id}]'
+        else:
+            return word
+    
+    # Use re.sub with a replacement function
+    result = re.sub(pattern, replace_func, text)
+    return result
 
 
 def load_data(paht: Union[str, Path]) -> pd.DataFrame:

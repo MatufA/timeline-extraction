@@ -1,11 +1,55 @@
 import logging
 import re
+import json
 from pathlib import Path
+from typing import List
 
 import pandas as pd
 
 from full_temporal_relation.data.preprocessing import Doc, load_data
 from full_temporal_relation.metrics import get_n_graph_cycles
+
+
+def prepare_df_from_json_response(response: List[dict], doc_obj: Doc, mode: str):
+    ei_keys = set(doc_obj.mapping.values())
+    data = []
+
+    if isinstance(response, str):
+        new_response = []
+        for r in response.replace('[', '').replace(',', '').strip().split('\n'):
+            try:
+                new_response.append(json.loads(r.strip()))
+            except json.JSONDecodeError as e:
+                pass
+
+    else:
+        new_response = response
+
+    for relation in new_response:
+        e1, e2 = f'ei{relation["event1"]}', f'ei{relation["event2"]}'
+        relation = relation['relation']
+        if e1 not in ei_keys or e2 not in ei_keys:
+            unique_id = 'UNDEFINED'
+        else:
+            unique_id = '-'.join(sorted([e1, e2]))
+
+        if relation == 'after':
+            e1, e2 = e2, e1
+            label = 'after'
+            relation = 'before'
+        else:
+            label = relation
+
+        data.append({
+            'docid': doc_obj.docid,
+            'eiid1': e1.strip(),
+            'eiid2': e2.strip(),
+            'relation': relation,
+            'unique_id': unique_id,
+            'p_label': label.upper(),
+            'mode': mode
+        })
+    return pd.DataFrame(data)
 
 
 def prepare_df_from_response(response: str, doc_obj: Doc, mode: str):
