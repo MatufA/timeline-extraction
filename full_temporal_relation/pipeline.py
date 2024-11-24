@@ -6,7 +6,7 @@ from typing import List
 
 import pandas as pd
 
-from full_temporal_relation.data.postprocessing import prepare_df_from_response, majority_vote_decision
+from full_temporal_relation.data.postprocessing import prepare_df_from_response, majority_vote_decision, prepare_df_from_json_response
 from full_temporal_relation.data.preprocessing import Doc, load_data
 from full_temporal_relation.metrics import summary_results
 from full_temporal_relation.models.HuggingFaceClient import HuggingfaceClient
@@ -14,11 +14,7 @@ from full_temporal_relation.models.LLModel import LLModel
 # from full_temporal_relation.models.TogetherAIClient import TogetherAIClient
 # from full_temporal_relation.models.gemini import Gemini
 # from full_temporal_relation.models.llama3 import GroqModel
-from full_temporal_relation.data.postprocessing import prepare_df_from_response, majority_vote_decision
-from full_temporal_relation.visualization.graph import draw_directed_graph
-from full_temporal_relation.data.preprocessing import load_data, Doc
-from full_temporal_relation.graph import Graph, create_simple_graph
-from prompts.Prompt import Prompt
+from full_temporal_relation.prompts.Prompt import Prompt, PairwisePrompt
 
 DATA_PATH = Path('./data')
 MATRES_DATA_PATH = DATA_PATH / 'MATRES'
@@ -42,11 +38,12 @@ def main(model_name: str, method: str, model: LLModel,  prompt_params: List[str]
     results_path = TRC_RAW_PATH / 'results' / method / f'{mode}-{data_name}results-{suffix_name}.csv'
 
     # Generate model and response
-    model.generate_responses(text_path=TRC_RAW_PATH / 'raw_text' / raw_text_name,
+    resluts = model.generate_responses(text_path=TRC_RAW_PATH / 'raw_text' / raw_text_name,
                             #  prompt_path=TRC_RAW_PATH / 'prompts' / method / prompt_filename,
                              results_path=llm_response_path,
                              prompt_params=prompt_params, 
                              prompt_template=prompt)
+    results_df = pd.DataFrame({'doc_id': res['doc_id'], 'trail': res['trail'], 'response': res['response']} for res in resluts)
 
     all_parsed_response_df = pd.DataFrame(columns=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2',
                                                    'relation', 'unique_id', 'model_name',
@@ -60,14 +57,15 @@ def main(model_name: str, method: str, model: LLModel,  prompt_params: List[str]
     #     results_df = pd.DataFrame.from_dict(responses)
     # else:
     #     results_df = pd.read_json(llm_response_path, lines=True)
-    results_df = pd.read_json(llm_response_path, lines=True)
+    # results_df = pd.read_json(llm_response_path, lines=True)
 
     for doc_id, group in results_df.groupby('doc_id'):
         doc = Doc(PLATINUM_RAW / f'{doc_id}.tml')
         for idx, (_, row) in enumerate(group.iterrows()):
             response = row.response
 
-            parsed_response_df = prepare_df_from_response(response, doc, mode)
+            # parsed_response_df = prepare_df_from_response(response, doc, mode)
+            parsed_response_df = prepare_df_from_json_response(response, doc, mode)
             parsed_response_df['model_name'] = model_name
             parsed_response_df['iter'] = idx
             all_parsed_response_df = pd.concat([all_parsed_response_df, parsed_response_df], ignore_index=True)
@@ -95,7 +93,7 @@ def get_summary_results(model_name: str, method: str, labeled_path: Path, result
 
 
 if __name__ == '__main__':
-    gpu_device = 1
+    gpu_device = 0
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
 
     BASE_NAMES = ['AQUAINT', 'TimeBank', 'te3-platinum']
@@ -119,12 +117,13 @@ if __name__ == '__main__':
     # prompt_filename = 'graph-generation-v2.txt'
     prompt_params = ['text', 'relations']
     suffix_path = 'completion'
-    prompt = Prompt(use_few_shot=True, use_completion=True)
+    # prompt = MultiEvents(use_few_shot=True, use_completion=True, use_vague=False)
+    prompt = PairwisePrompt(use_few_shot=True, use_vague=False)
 
     # prompt_filename = 'graph-generation-v3.txt'
     # prompt_params = ['text', 'relations']
     # suffix_path = 'completion-explanation'
-    # prompt = Prompt(use_few_shot=True, provide_justification=True, use_completion=True)
+    # prompt = MultiEvents(use_few_shot=True, provide_justification=False, use_completion=True, use_vague=False)
 
     # raw_text_name = 'platinum_text_prepared.json'
     # raw_text_name = 'platinum_text_w_relations_prepared.json'
