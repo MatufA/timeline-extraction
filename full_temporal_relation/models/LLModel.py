@@ -1,13 +1,15 @@
+import re
 import abc
 import json
-from typing import List
+from typing import List, Type
 
 import pandas as pd
 from time import sleep
 from pathlib import Path
 from tqdm.auto import tqdm, trange
 
-from prompts.Prompt import Prompt
+from full_temporal_relation.prompts.Prompt import Prompt, MultiEvents, PairwisePrompt
+from full_temporal_relation.data.preprocessing import replace_eid
 
 
 class LLModel(abc.ABC):
@@ -32,7 +34,9 @@ class LLModel(abc.ABC):
 
         records = json.load(text_path.open('r'))
 
+        new_records = []
         if 'relations' in prompt_params:
+            prompt_params = ['text']
             for record in records:
                 rels = []
                 for rel in record['relations'].split('\n'):
@@ -40,8 +44,15 @@ class LLModel(abc.ABC):
                     e1, e2 = e1.strip(), e2.strip()
                     # rels.append(json.dumps({"event1": e1, "event2": e2}))
                     rels.append(f'{e1} {e2}')
-                record['relations'] = '\n'.join(rels)
+                    new_records.append({
+                        'text': replace_eid(record['text'], exclude_ids=[e1, e2]),
+                        'doc_id': record["doc_id"], 
+                        'e1': e1,
+                        'e2': e2
+                        })
 
+
+                # record['relations'] = '\n'.join(rels)
 
         # prompt_template = prompt_path.open('r').read()
 
@@ -53,8 +64,9 @@ class LLModel(abc.ABC):
         #         doc_iter = records_partial_df.doc_id.unique()
         #         records = (record for record in records if record['doc_id'] not in doc_iter)
 
+        resluts = []
         with results_path.open('w') as file:
-            for record in tqdm(records, desc='Text evaluation', position=0, leave=True):
+            for record in tqdm(new_records, desc='Text evaluation', position=0, leave=True):
                 for trail in trange(self.n_trails, desc=f'Processing record: {record["doc_id"]}',
                                     position=1, leave=False):
                     # prompt = prompt_template.format(**{p: record[p] for p in prompt_params})
@@ -65,9 +77,26 @@ class LLModel(abc.ABC):
                     res['prompt'] = prompt
                     res['doc_id'] = record['doc_id']
                     res['trail'] = trail
+                    if issubclass(type(prompt_template), PairwisePrompt):
+                        start_pattern = r'^(before|after|equal|vague)\b'
+                        end_pattern = r'\b(before|after|equal|vague)(?:[.!?]|\s*$)'
+                        if start_label_match := re.search(start_pattern, res['response'].lower()):
+                            label = start_label_match.group(1)
+                        elif end_label_match := re.search(end_pattern, res['response'].lower()):
+                            label = end_label_match.group(1)
+                        else:
+                            label = res['response']
+
+                        res['response'] = {
+                            'event1': record['e1'],
+                            'event2': record['e2'],
+                            'relation': res['response']
+                        }
                     json_line = json.dumps(res)
                     file.write(json_line + '\n')
+                    resluts.append(res)
 
                     sleep(30) if self.each_trail else None
 
                 sleep(10) if self.each_doc else None
+        return resluts
