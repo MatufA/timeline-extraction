@@ -1,14 +1,10 @@
 import json
+import logging
 import torch
 from full_temporal_relation.models.LLModel import LLModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from transformers import pipeline
-
-messages = [
-    {"role": "user", "content": "Who are you?"},
-]
-pipe = pipeline("text-generation", model="meta-llama/Llama-3.1-8B-Instruct")
 
 
 class HuggingfaceClient(LLModel):
@@ -34,8 +30,18 @@ class HuggingfaceClient(LLModel):
         )
 
     def prepare_response(self, response):
+        content = response[0]['generated_text'][-1]['content']
+        try:
+            response = json.loads(content.replace('\n', ''))
+        except json.JSONDecodeError as e:
+            try:
+                response = json.loads(content.replace(',\n', '').replace('\n', ''))
+            except json.JSONDecodeError as e:
+                logging.error(f'unable to parse content {content}')
+                response = content
+
         return {
-            'response': json.loads(response[0]['generated_text'][-1]['content'])
+            'response': response
         }
 
 
