@@ -25,8 +25,8 @@ def replace_eid(text, exclude_ids):
     return result
 
 
-def load_data(paht: Union[str, Path]) -> pd.DataFrame:
-    df = pd.read_csv(paht, sep='\t', header=None,
+def load_data(path: Union[str, Path]) -> pd.DataFrame:
+    df = pd.read_csv(path, sep='\t', header=None,
                      names=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2', 'relation'])
     df.eiid1 = 'ei' + df.eiid1.astype(str)
     df.eiid2 = 'ei' + df.eiid2.astype(str)
@@ -96,17 +96,20 @@ def prepare_as_jsonl(df: pd.DataFrame, output_path: Path, mode: Literal['multi',
     if mode == 'pair':
         for idx, row in df.iterrows():
             data.append({
-                'text': row.text,
-                'relations': f'{row.eiid1} [RELATION] {row.eiid2}',
-                'doc_id': row.docid
+                'text': replace_eid(row.text, exclude_ids=[row.eiid1, row.eiid2]),
+                'relations': [(row.eiid1, row.eiid2)],
+                'doc_id': row.docid, 
+                'true_label': row.label.lower()
             })
     else:
         for doc_id, group in df.groupby('docid'):
-            relations = '\n'.join(group.loc[:, ['eiid1', 'eiid2']].apply(lambda row: ' [RELATION] '.join(row), axis=1))
+            # relations = '\n'.join(group.loc[:, ['eiid1', 'eiid2']].apply(lambda row: ' [RELATION] '.join(row), axis=1))
+            unique_relation_ids = np.unique(group.loc[:, ['eiid1', 'eiid2']].to_numpy().flatten())
             data.append({
-                'text': group.iloc[0].text,
-                'relations': relations,
-                'doc_id': doc_id
+                'text': replace_eid(group.iloc[0].text, exclude_ids=unique_relation_ids),
+                'relations': group.loc[:, ['eiid1', 'eiid2']].apply(lambda row: tuple(row), axis=1).values.tolist(),
+                'doc_id': doc_id, 
+                'true_label': group.loc[:, 'label'].to_numpy().tolist()
             })
 
     output_path.write_text(json.dumps(data, indent=2))
@@ -144,41 +147,36 @@ class Doc:
                      self.doc.find_all('tlink') if d.get('reltype') in set(['IBEFORE', 'BEFORE', 'AFTER', 'IAFTER']))
         return list(filter(lambda d: d[0] is not None and d[1] is not None, relations))
 
-    def to_prompt(self) -> str:
-        return f"""
-    Use the uppercase letter with the prefix e[numeric] to describe the timeline graph with temporal relations between them use BEFORE and AFTER. specify only the code name aka e[numeric]. Verify yourself and answer only from the provided text ..
-    For example: e1 before e2
-    The text-
-    {self.get_text()}
-        """
 
 if __name__ == '__main__':
-    DATA_PATH = Path('../../data')
+    DATA_PATH = Path('./data')
     MATRES_PATH = DATA_PATH / 'MATRES'
     DOCS_DIRS_PATH = MATRES_PATH / 'raw' / 'TBAQ-cleaned'
 
     BASE_NAMES = ['AQUAINT', 'TimeBank', 'te3-platinum']
     BASE_DF_PATHS = ['aquaint.txt', 'timebank.txt', 'platinum.txt']
-    # mode = 'pair'
-    mode = 'multi'
+    modes = ['pair', 'multi']
 
-    if mode == 'pair':
-        output = DATA_PATH / 'trc-prepared-data'
-    elif mode == 'multi':
-        output = DATA_PATH / 'te-prepared-data'
+    for mode in modes: 
 
-    for name, df_name in zip(BASE_NAMES, BASE_DF_PATHS):
-        output_file = output / f'{mode}-{name}.csv'
+        if mode == 'pair':
+            output = DATA_PATH / 'wo-vague' / 'trc-prepared-data'
+        elif mode == 'multi':
+            output = DATA_PATH / 'wo-vague' / 'te-prepared-data'
 
-        if not output_file.exists():
-            gold_df = load_data(MATRES_PATH / df_name)
-            df = generate_training_dataset(gold_df, docs_dir=DOCS_DIRS_PATH / name, mode=mode)
-            output.mkdir(exist_ok=True)
-            df.to_csv(output_file, index=False)
-        else:
-            df = pd.read_csv(output_file, header=0)
-            print(f"Data already exists for {name}. Skipping.")
+        for name, df_name in zip(BASE_NAMES, BASE_DF_PATHS):
+            output_file = output / f'{mode}-{name}.csv'
 
-        prepare_as_jsonl(df,
-                         output_path=DATA_PATH/'TRC'/'raw_text'/f'{mode}_{name.lower()}_text_w_relations_prepared.json',
-                         mode=mode)
+            if not output_file.exists():
+                gold_df = load_data(MATRES_PATH / df_name)
+                gold_df = gold_df[gold_df.label != 'VAGUE']
+                df = generate_training_dataset(gold_df, docs_dir=DOCS_DIRS_PATH / name, mode=mode)
+                output.mkdir(exist_ok=True, parents=True)
+                df.to_csv(output_file, index=False)
+            else:
+                df = pd.read_csv(output_file, header=0)
+                print(f"Data already exists for {name}. Skipping.")
+
+            prepare_as_jsonl(df,
+                            output_path=DATA_PATH/'TRC'/'raw_text'/f'{mode}_{name.lower()}_text_w_relations_prepared.json',
+                            mode=mode)
