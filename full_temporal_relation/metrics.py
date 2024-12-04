@@ -2,13 +2,14 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import precision_recall_fscore_support, classification_report
 
 from full_temporal_relation.data.preprocessing import load_data
 from full_temporal_relation.graph import Graph
 
 
 def summary_results(model_results_path: Path, gold_df: pd.DataFrame, model_name: str, target_col:str='label'):
-    relations = gold_df.label.unique()
+    relations = ['BEFORE', 'AFTER', 'EQUAL', 'VAGUE']
     df__results = pd.read_csv(model_results_path)
     preds_df = (
         df__results[['docid', 'unique_id', 'relation_selected', 'p_label']]
@@ -16,6 +17,11 @@ def summary_results(model_results_path: Path, gold_df: pd.DataFrame, model_name:
         .dropna(axis='rows')
         .drop_duplicates(['docid', 'unique_id', 'relation_selected'])
         .rename({'relation_selected': 'relation'}, axis='columns'))
+    
+    # non_vague_gold_df = gold_df[gold_df['label'] != 'VAGUE']
+    # joined_df = pd.merge(preds_df, non_vague_gold_df[['docid', 'unique_id', 'label']], how='inner',
+    #                      on=['docid', 'unique_id',])
+    # precision, recall, f1, support = precision_recall_fscore_support(joined_df.label, joined_df.p_label, average='samples', labels=joined_df.p_label.unique())
 
     # grouped results by relation type, results summarization
     relation_grouped_df = relation_table(gold_df, preds_df, model_name, target_col=target_col)
