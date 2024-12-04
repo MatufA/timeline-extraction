@@ -6,7 +6,7 @@ class Prompt:
 
 
 class MultiEvents(Prompt):
-    def __init__(self, use_vague = True, use_few_shot: bool = False, provide_justification: bool = False, use_completion: bool = False):
+    def __init__(self, use_vague = True, use_few_shot: bool = False, provide_justification: bool = False):
         self.use_vague = use_vague
         self.use_few_shot = use_few_shot
         self.provide_justification = provide_justification
@@ -168,6 +168,8 @@ class PairwisePrompt(Prompt):
         assert text is not None, "text not provided"
 
         system_content = self.system
+        if self.use_few_shot:
+            system_content += f'\n{self.few_shot}'
 
         context = self.context.format(text=text)
 
