@@ -21,12 +21,13 @@ def prepare_df_from_json_response(response: List[dict], doc_obj: Doc, mode: str)
                 new_response.append(json.loads(r.strip()))
             except json.JSONDecodeError as e:
                 pass
-
+    elif isinstance(response, dict):
+        new_response = [response]
     else:
         new_response = response
 
     for relation in new_response:
-        e1, e2 = f'ei{relation["event1"]}', f'ei{relation["event2"]}'
+        e1, e2 = (f'ei{relation["event1"]}', f'ei{relation["event2"]}') if mode != 'pair' else (relation["event1"], relation["event2"])
         relation = relation['relation']
         if e1 not in ei_keys or e2 not in ei_keys:
             unique_id = 'UNDEFINED'
