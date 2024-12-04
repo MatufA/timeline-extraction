@@ -14,7 +14,7 @@ from full_temporal_relation.models.LLModel import LLModel
 # from full_temporal_relation.models.TogetherAIClient import TogetherAIClient
 # from full_temporal_relation.models.gemini import Gemini
 # from full_temporal_relation.models.llama3 import GroqModel
-from full_temporal_relation.prompts.Prompt import Prompt, PairwisePrompt
+from full_temporal_relation.prompts.Prompt import Prompt, PairwisePrompt, MultiEvents
 
 DATA_PATH = Path('./data')
 MATRES_DATA_PATH = DATA_PATH / 'MATRES'
@@ -43,7 +43,7 @@ def main(model_name: str, method: str, model: LLModel,  prompt_params: List[str]
                              results_path=llm_response_path,
                              prompt_params=prompt_params, 
                              prompt_template=prompt)
-    results_df = pd.DataFrame({'doc_id': res['doc_id'], 'trail': res['trail'], 'response': res['response']} for res in resluts)
+    # results_df = pd.DataFrame({'doc_id': res['doc_id'], 'trail': res['trail'], 'response': res['response']} for res in resluts)
 
     all_parsed_response_df = pd.DataFrame(columns=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2',
                                                    'relation', 'unique_id', 'model_name',
@@ -57,18 +57,48 @@ def main(model_name: str, method: str, model: LLModel,  prompt_params: List[str]
     #     results_df = pd.DataFrame.from_dict(responses)
     # else:
     #     results_df = pd.read_json(llm_response_path, lines=True)
-    # results_df = pd.read_json(llm_response_path, lines=True)
+    results_df = pd.read_json(llm_response_path, lines=True)
 
-    for doc_id, group in results_df.groupby('doc_id'):
-        doc = Doc(PLATINUM_RAW / f'{doc_id}.tml')
-        for idx, (_, row) in enumerate(group.iterrows()):
-            response = row.response
+    data = []
+    for idx, row in results_df.iterrows():
+        if isinstance(prompt, PairwisePrompt):
+            true_labels = [row.true_label]
+        else:
+            true_labels = row.true_label
 
-            # parsed_response_df = prepare_df_from_response(response, doc, mode)
-            parsed_response_df = prepare_df_from_json_response(response, doc, mode)
-            parsed_response_df['model_name'] = model_name
-            parsed_response_df['iter'] = idx
-            all_parsed_response_df = pd.concat([all_parsed_response_df, parsed_response_df], ignore_index=True)
+        if isinstance(row.response, str):
+            p_label = row.response.upper()
+        else:
+            p_label = row.response['relation'].upper()
+
+        for true_label, (e1, e2) in zip(true_labels, row.relations):
+            data.append({
+                'docid': row.doc_id,
+                'eiid1': e1,
+                'eiid2': e2,
+                'relation': true_label,
+                'unique_id': '-'.join(sorted([e1, e2])),
+                'p_label': p_label,
+                'mode': mode,
+                'model_name': model_name,
+                'iter': row.trail, 
+                'prompt': row.prompt,
+                'raw_response': row.content
+            })
+    all_parsed_response_df = pd.DataFrame(data)
+        
+
+    # else:
+    #     for doc_id, group in results_df.groupby('doc_id'):
+    #         doc = Doc(PLATINUM_RAW / f'{doc_id}.tml')
+    #         for idx, (_, row) in enumerate(group.iterrows()):
+    #             response = row.response
+
+    #             # parsed_response_df = prepare_df_from_response(response, doc, mode)
+    #             parsed_response_df = prepare_df_from_json_response(response, doc, mode)
+    #             parsed_response_df['model_name'] = model_name
+    #             parsed_response_df['iter'] = idx
+    #             all_parsed_response_df = pd.concat([all_parsed_response_df, parsed_response_df], ignore_index=True)
 
     all_parsed_response_df.to_csv(parsed_response_path, index=False)
 
@@ -81,10 +111,11 @@ def get_summary_results(model_name: str, method: str, labeled_path: Path, result
     result_file_suffix = generate_suffix_name(model_name, method, suffix_path)
 
     gold_df = load_data(labeled_path)
+    non_vague_gold_df = gold_df[gold_df['label'] != 'VAGUE']
 
     # try:
     df = summary_results(results_path,
-                         gold_df,
+                         non_vague_gold_df,
                          model_name)
     df['method'] = method
     df['suffix_path'] = suffix_path
@@ -93,8 +124,10 @@ def get_summary_results(model_name: str, method: str, labeled_path: Path, result
 
 
 if __name__ == '__main__':
-    gpu_device = 0
+    gpu_device = 1
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
+    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    # os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'  # for mistralai
 
     BASE_NAMES = ['AQUAINT', 'TimeBank', 'te3-platinum']
     BASE_DF_PATHS = ['aquaint.txt', 'timebank.txt', 'platinum.txt']
@@ -105,8 +138,8 @@ if __name__ == '__main__':
     mode = 'pair'
     # mode = 'multi'
 
-    # method = 'zero-shot'
-    method = 'few-shot'
+    method = 'zero-shot'
+    # method = 'few-shot'
 
     # prompt_filename = 'graph-generation-v1.txt'
     # prompt_params = ['text']
@@ -117,8 +150,9 @@ if __name__ == '__main__':
     # prompt_filename = 'graph-generation-v2.txt'
     prompt_params = ['text', 'relations']
     suffix_path = 'completion'
-    # prompt = MultiEvents(use_few_shot=True, use_completion=True, use_vague=False)
-    prompt = PairwisePrompt(use_few_shot=True, use_vague=False)
+    is_few_shot = (method == 'few-shot')
+    prompt = MultiEvents(use_few_shot=is_few_shot, use_vague=False, provide_justification=False)
+    # prompt = PairwisePrompt(use_few_shot=is_few_shot, use_vague=False)
 
     # prompt_filename = 'graph-generation-v3.txt'
     # prompt_params = ['text', 'relations']
@@ -138,24 +172,28 @@ if __name__ == '__main__':
 
     # model_name = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
     # model = TogetherAIClient(model_name)
+    
+    model_names = ["meta-llama/Llama-3.2-3B-Instruct"]  # "meta-llama/Llama-3.1-8B-Instruct", 
+    # model_names = ['mistralai/Mistral-7B-Instruct-v0.3']
 
-    model_name = "meta-llama/Llama-3.1-8B-Instruct"
-    model = HuggingfaceClient(model_name=model_name, device=gpu_device)
+    for model_name in model_names:
+    # model_name = "meta-llama/Llama-3.2-3B-Instruct"
+        model = HuggingfaceClient(model_name=model_name, device=gpu_device)
 
-    """
-    train - timebank.txt
-    valid - aquaint.txt
-    test - platinum.txt
-    """
+        """
+        train - timebank.txt
+        valid - aquaint.txt
+        test - platinum.txt
+        """
 
-    results_path = main(model_name, method, model, prompt_params,
-         raw_text_name=raw_text_name, suffix_path=suffix_path, data_name=name, mode=mode, prompt=prompt)
+        results_path = main(model_name, method, model, prompt_params,
+            raw_text_name=raw_text_name, suffix_path=suffix_path, data_name=name, mode=mode, prompt=prompt)
 
-    results_df = get_summary_results(model_name, method,
-                                  labeled_path=MATRES_DATA_PATH / labeled_df_name,
-                                  results_path=results_path,
-                                  suffix_path=suffix_path)
+        results_df = get_summary_results(model_name, method,
+                                    labeled_path=MATRES_DATA_PATH / labeled_df_name,
+                                    results_path=results_path,
+                                    suffix_path=suffix_path)
 
-    results_metrics_path = TRC_RAW_PATH / 'final_metrics' / method / results_path.name
-    results_metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    results_df.to_csv(results_metrics_path, index=False)
+        results_metrics_path = TRC_RAW_PATH / 'final_metrics' / method / results_path.name
+        results_metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        results_df.to_csv(results_metrics_path, index=False)
