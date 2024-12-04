@@ -14,7 +14,7 @@ class HuggingfaceClient(LLModel):
         self.pipe = pipeline("text-generation", 
                              model=model_name, 
                              torch_dtype=torch.float16, 
-                             device=device)
+                             device_map='auto')
 
     def generate_response(self, prompt):
         messages = [
@@ -37,10 +37,10 @@ class HuggingfaceClient(LLModel):
             try:
                 response = json.loads(content.replace(',\n', '').replace('\n', ''))
             except json.JSONDecodeError as e:
-                logging.error(f'unable to parse content {content}')
                 response = content
 
         return {
+            'content': content,
             'response': response
         }
 
