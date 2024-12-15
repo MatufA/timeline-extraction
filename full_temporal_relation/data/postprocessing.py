@@ -133,6 +133,44 @@ def transform_to_before(df, doc_id):
             row.verb1, row.verb2, row.eiid1, row.eiid2, row.relation), axis='columns', result_type="expand")
     return doc_events
 
+import pandas as pd
+from pathlib import Path
+
+def majority_vote_decision_new(parsed_response_path: Path, results_path: Path, min_votes: int = 3):
+    """
+    Select the row with most votes for each (docid, unique_id) with at least min_votes.
+    
+    Args:
+        parsed_response_path (Path): Input CSV file path
+        results_path (Path): Output CSV file path
+        min_votes (int, optional): Minimum votes required. Defaults to 3.
+    
+    Returns:
+        pd.DataFrame: Filtered dataframe with majority voted results
+    """
+    # Read the parsed response CSV
+    df = pd.read_csv(parsed_response_path)
+    
+    # Group by docid, unique_id, and label, count votes
+    vote_counts = df.groupby(['docid', 'unique_id', 'relation']).size().reset_index(name='vote_count')
+    
+    # Find rows with at least min_votes
+    qualified_votes = vote_counts[vote_counts['vote_count'] >= min_votes]
+    
+    # For each (docid, unique_id), select the label with max votes
+    majority_labels = qualified_votes.loc[qualified_votes.groupby(['docid', 'unique_id'])['vote_count'].idxmax()]
+    
+    # Merge back with original dataframe to get full row details
+    filtered_df = pd.merge(df.drop_duplicates(subset=['docid', 'unique_id', 'relation']), 
+                           majority_labels[['docid', 'unique_id', 'relation']], 
+                           on=['docid', 'unique_id', 'relation'], 
+                           how='inner')
+    
+    # Save the filtered results
+    filtered_df.to_csv(results_path, index=False)
+    
+    return filtered_df
+
 
 def majority_vote_decision(parsed_response_path: Path, results_path: Path, min_votes: int = 3):
     predicted_df = pd.read_csv(parsed_response_path)
@@ -164,20 +202,12 @@ def majority_vote_decision(parsed_response_path: Path, results_path: Path, min_v
 
     agg_pred_df = pd.DataFrame(agg_preds)
     predicted_df.relation = predicted_df.relation.str.upper()
-    merge_cols = ['docid', 'unique_id', 'relation']
-    predicted_agg_df = (pd.merge(predicted_df, agg_pred_df, on=merge_cols, how='inner')
-                        .drop_duplicates(merge_cols))
-
-    cycles = get_n_graph_cycles(predicted_agg_df)
-
-    cycles_df = pd.DataFrame.from_dict(cycles, orient='index', columns=['ccr']).reset_index()
-    cycles_df.columns = ['docid', 'n_cycles']
 
     final_df = pd.merge(predicted_df, agg_pred_df,
                         on=['docid', 'unique_id'],
                         suffixes=(None, "_selected"),
                         how='left')
-    final_df = pd.merge(final_df, cycles_df, on=['docid'], how='left')
     final_df['min_vote'] = min_votes
 
     final_df.to_csv(results_path, index=False)
+    return final_df
