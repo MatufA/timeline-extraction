@@ -2,6 +2,7 @@ import re
 import json
 import logging
 from typing import Union, Literal
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
@@ -40,6 +41,47 @@ def load_data(path: Union[str, Path]) -> pd.DataFrame:
     df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
 
     return df
+
+def generate_all_comb_training_dataset(docs_dir: Union[str, Path], output_path: Path, window: int = 2) -> pd.DataFrame:
+    docs = [Doc(path) for path in Path(docs_dir).glob('*.tml')]
+    ei_regex = r'(ei\d+):\w+\s*'
+    
+    doc_relations = []
+    for doc in docs:
+        full_text = doc.get_text()
+        lines = full_text.split('\n\n')
+
+        event_dict = {}
+        for idx, line in enumerate(lines):
+            ids_groups = re.findall(ei_regex, line)
+            if ids_groups:
+                indexes = np.repeat(idx, len(ids_groups))
+                event_dict.update(dict(zip(ids_groups, indexes)))
+
+        relation_history = set()
+        lines_size = len(lines)
+        for idx, line in enumerate(lines):
+            max_idx = min(lines_size, idx+window) +1
+            window_text = '\n'.join(lines[idx:max_idx])
+            ids_groups = re.findall(ei_regex, window_text)
+
+            if ids_groups:
+                rel_combs = combinations(ids_groups, 2)
+                for comb in rel_combs:
+                    if tuple(comb) not in relation_history:
+                        min_idx = min(event_dict[comb[0]], event_dict[comb[1]])
+                        max_idx = max(event_dict[comb[0]], event_dict[comb[1]])
+
+                        train_text = '\n'.join(lines[min_idx: max_idx+1])
+
+                        relation_history.add(tuple(comb))  
+                        doc_relations.append({
+                            'doc_id': doc.docid,
+                            'text': replace_eid(train_text, exclude_ids=comb), 
+                            'relations': [list(comb)]
+                        })
+    output_path.write_text(json.dumps(doc_relations, indent=2))
+
 
 def generate_training_dataset(gold_df: pd.DataFrame, docs_dir: Union[str, Path], mode: str) -> pd.DataFrame:
     docs = [Doc(path) for path in Path(docs_dir).glob('*.tml')]
@@ -153,9 +195,9 @@ if __name__ == '__main__':
     MATRES_PATH = DATA_PATH / 'MATRES'
     DOCS_DIRS_PATH = MATRES_PATH / 'raw' / 'TBAQ-cleaned'
 
-    BASE_NAMES = ['AQUAINT', 'TimeBank', 'te3-platinum']
-    BASE_DF_PATHS = ['aquaint.txt', 'timebank.txt', 'platinum.txt']
-    modes = ['pair', 'multi']
+    BASE_NAMES = ['te3-platinum'] # 'AQUAINT', 'TimeBank', 
+    BASE_DF_PATHS = ['platinum.txt'] # 'aquaint.txt', 'timebank.txt', 
+    modes = ['comb'] # 'pair', 'multi', 
 
     for mode in modes: 
 
@@ -163,20 +205,29 @@ if __name__ == '__main__':
             output = DATA_PATH / 'wo-vague' / 'trc-prepared-data'
         elif mode == 'multi':
             output = DATA_PATH / 'wo-vague' / 'te-prepared-data'
+        elif mode == 'comb':
+            output = DATA_PATH / 'wo-vague' / 'trc-prepared-data'
 
         for name, df_name in zip(BASE_NAMES, BASE_DF_PATHS):
             output_file = output / f'{mode}-{name}.csv'
+            jsonl_out_path = DATA_PATH/'TRC'/'raw_text'/f'{mode}_{name.lower()}_text_w_relations_prepared.json'
 
-            if not output_file.exists():
-                gold_df = load_data(MATRES_PATH / df_name)
-                gold_df = gold_df[gold_df.label != 'VAGUE']
-                df = generate_training_dataset(gold_df, docs_dir=DOCS_DIRS_PATH / name, mode=mode)
-                output.mkdir(exist_ok=True, parents=True)
-                df.to_csv(output_file, index=False)
+            if mode == 'comb':
+                df = generate_all_comb_training_dataset(docs_dir=DOCS_DIRS_PATH / name, 
+                                                    output_path=jsonl_out_path,
+                                                    window=2)
             else:
-                df = pd.read_csv(output_file, header=0)
-                print(f"Data already exists for {name}. Skipping.")
+                if not output_file.exists():
+                    gold_df = load_data(MATRES_PATH / df_name)
+                    gold_df = gold_df[gold_df.label != 'VAGUE']
+                    
+                    df = generate_training_dataset(gold_df, docs_dir=DOCS_DIRS_PATH / name, mode=mode)
+                    output.mkdir(exist_ok=True, parents=True)
+                    df.to_csv(output_file, index=False)
+                else:
+                    df = pd.read_csv(output_file, header=0)
+                    print(f"Data already exists for {name}. Skipping.")
 
-            prepare_as_jsonl(df,
-                            output_path=DATA_PATH/'TRC'/'raw_text'/f'{mode}_{name.lower()}_text_w_relations_prepared.json',
-                            mode=mode)
+                prepare_as_jsonl(df,
+                                output_path=jsonl_out_path,
+                                mode=mode)
