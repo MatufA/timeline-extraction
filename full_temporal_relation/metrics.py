@@ -8,43 +8,60 @@ from full_temporal_relation.data.preprocessing import load_data
 from full_temporal_relation.graph import Graph
 
 
-def summary_results(model_results_path: Path, gold_df: pd.DataFrame, model_name: str, target_col:str='label'):
-    relations = ['BEFORE', 'AFTER', 'EQUAL', 'VAGUE']
-    df__results = pd.read_csv(model_results_path)
-    preds_df = (
-        df__results[['docid', 'unique_id', 'relation_selected', 'p_label']]
-        .copy()
-        .dropna(axis='rows')
-        .drop_duplicates(['docid', 'unique_id', 'relation_selected'])
-        .rename({'relation_selected': 'relation'}, axis='columns'))
+def summary_results(model_results_df: pd.DataFrame, gold_df: pd.DataFrame, model_name: str, target_col:str='label'):
+    relations = gold_df.label.unique().tolist()
+
+    # find cycles in docs
+    cycles = get_n_graph_cycles(model_results_df, relation_key='p_label')
+    cycles_df = pd.DataFrame.from_dict(cycles, orient='index', columns=['ccr']).reset_index()
+    cycles_df.columns = ['docid', 'n_cycles']
+    model_results_with_cycles = pd.merge(model_results_df, cycles_df, on=['docid'], how='left')
+    cycles_score = (f"{int(model_results_with_cycles[['docid', 'n_cycles']].drop_duplicates()['n_cycles'].sum())} / "
+                    f"{model_results_with_cycles['docid'].nunique()}")
+
+    # merge predictions with gold data and annotate NO_PREDS (no predictions for label in gold df) and 
+    # NO_LABEL (no label for relation in gold df)
+    df_results = pd.merge(model_results_with_cycles, gold_df[['docid', 'unique_id', 'label']], how='outer',
+                         on=['docid', 'unique_id',])
+    df_results['label'] = df_results.label.fillna('NO_LABEL')
+    df_results['p_label'] = df_results.p_label.fillna('NO_PREDS')
+    df_results['p_label'] = df_results['p_label'].apply(lambda x: x if x in relations else 'NO_PREDS')
     
-    # non_vague_gold_df = gold_df[gold_df['label'] != 'VAGUE']
-    # joined_df = pd.merge(preds_df, non_vague_gold_df[['docid', 'unique_id', 'label']], how='inner',
-    #                      on=['docid', 'unique_id',])
-    # precision, recall, f1, support = precision_recall_fscore_support(joined_df.label, joined_df.p_label, average='samples', labels=joined_df.p_label.unique())
+    # change non standard labels for preformance metrics
+    df_results['p_label_for_eval'] = df_results['p_label'].copy()
+    no_preds_mask = df_results.p_label == 'NO_PREDS'
+    # choose randomly wrong label in case of NO_PREDS
+    df_results.loc[no_preds_mask, 'p_label_for_eval'] = df_results[no_preds_mask].apply(
+        lambda row: np.choose(1, list(set(relations) - set([row.label]))), 
+        axis='columns')
 
-    # grouped results by relation type, results summarization
-    relation_grouped_df = relation_table(gold_df, preds_df, model_name, target_col=target_col)
+    joined_df = pd.merge(df_results, gold_df[['docid', 'unique_id', 'label']], how='right',
+                         on=['docid', 'unique_id',], suffixes=('_old', None))
+    
+    # calculate covarage 
+    labels_mask = joined_df.p_label != 'NO_PREDS'
+    coverage_score = labels_mask.sum() / gold_df.shape[0]
 
-    # calculate cycles
-    matched_preds_df = pd.merge(preds_df, gold_df[['docid', 'unique_id']], how='inner',
-                             on=['docid', 'unique_id'])
-    coverage_score = matched_preds_df.shape[0]/gold_df.shape[0]
-    cycles_score = (f"{df__results[['docid', 'n_cycles']].drop_duplicates()['n_cycles'].sum()} / "
-                    f"{df__results['docid'].nunique()}")
+    # calculate precision, recall, f1 for each label
+    precision, recall, f1, support = precision_recall_fscore_support(joined_df.label, joined_df.p_label_for_eval, 
+                                                                     average=None, 
+                                                                     labels=relations, 
+                                                                     zero_division=0)
+    metrics_data = np.array(list(zip(precision, recall, f1, support)))
 
-    precision_df = precision(relation_grouped_df).fillna(0)
-    recall_df = recall(relation_grouped_df).fillna(0)
-    f1_df = calculate_f1(precision_df.to_numpy()[0], recall_df.to_numpy()[0])
-    micro_f1_score = calculate_micro_f1(precision_df.to_numpy()[0], recall_df.to_numpy()[0])
-    relax_micro_f1 = calculate_relax_micro_f1(precision_df.to_numpy()[0], recall_df.to_numpy()[0])
+    # calculate micro-f1 score
+    _, _, micro_f1_score, _ = precision_recall_fscore_support(joined_df.label, joined_df.p_label_for_eval, 
+                                                        average='micro', 
+                                                        labels=relations, 
+                                                        zero_division=0)
 
-    data_vecs = np.array(list(zip(precision_df.values.tolist()[0], recall_df.values.tolist()[0], f1_df.tolist())))
-    df = pd.DataFrame(columns=pd.MultiIndex.from_product([relations, ['precision', 'recall', 'f1']],
-                                                         names=['relation', 'metric']),
-                      data=data_vecs.flatten()[np.newaxis, :])
+    # create final metrics df
+    df = pd.DataFrame(metrics_data.flatten()[np.newaxis, :], 
+                      columns=pd.MultiIndex.from_product([relations, ['precision', 'recall', 'f1', 'support']],
+                                                         names=['relation', 'metric']))
+
     df['micro-f1'] = micro_f1_score
-    df['relax-micro-f1'] = relax_micro_f1
+    df['macro-f1'] = (f1 * support / support.sum()).sum() 
     df['cycles'] = cycles_score
     df['coverage'] = coverage_score
     return df
@@ -177,8 +194,8 @@ def correct_consistency_rate(df_predicted: pd.DataFrame, df_true: pd.DataFrame) 
     return results
 
 
-def get_n_graph_cycles(df: pd.DataFrame) -> dict:
-    return {k: len(v) for k, v in Graph().find_cycles(df).items()}
+def get_n_graph_cycles(df: pd.DataFrame, relation_key: str) -> dict:
+    return {k: len(v) for k, v in Graph(relation_key=relation_key).find_cycles(df).items()}
 
 
 if __name__ == '__main__':
