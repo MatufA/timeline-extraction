@@ -5,16 +5,22 @@ import os
 from typing import List
 
 import pandas as pd
+import torch
+import gc
+from dotenv import load_dotenv
 
-from full_temporal_relation.data.postprocessing import prepare_df_from_response, majority_vote_decision, prepare_df_from_json_response
+from full_temporal_relation.data.postprocessing import prepare_df_from_response, majority_vote_decision, prepare_df_from_json_response, majority_vote_decision_new
 from full_temporal_relation.data.preprocessing import Doc, load_data
 from full_temporal_relation.metrics import summary_results
 from full_temporal_relation.models.HuggingFaceClient import HuggingfaceClient
+from full_temporal_relation.models.OpenAIClient import OpenAIClient
 from full_temporal_relation.models.LLModel import LLModel
 # from full_temporal_relation.models.TogetherAIClient import TogetherAIClient
 # from full_temporal_relation.models.gemini import Gemini
 # from full_temporal_relation.models.llama3 import GroqModel
 from full_temporal_relation.prompts.Prompt import Prompt, PairwisePrompt, MultiEvents
+
+# load_dotenv()
 
 DATA_PATH = Path('./data')
 MATRES_DATA_PATH = DATA_PATH / 'MATRES'
@@ -35,14 +41,15 @@ def main(model_name: str, method: str, model: LLModel,  prompt_params: List[str]
 
     llm_response_path = TRC_RAW_PATH / 'llm_response' / method / f'{mode}-{data_name}-{suffix_name}.jsonl'
     parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / method / f'{mode}-{data_name}-results-{suffix_name}.csv'
-    results_path = TRC_RAW_PATH / 'results' / method / f'{mode}-{data_name}results-{suffix_name}.csv'
+    results_path = TRC_RAW_PATH / 'results' / method / f'{mode}-{data_name}-results-{suffix_name}.csv'
 
     # Generate model and response
-    resluts = model.generate_responses(text_path=TRC_RAW_PATH / 'raw_text' / raw_text_name,
-                            #  prompt_path=TRC_RAW_PATH / 'prompts' / method / prompt_filename,
-                             results_path=llm_response_path,
-                             prompt_params=prompt_params, 
-                             prompt_template=prompt)
+    # resluts = model.generate_responses(text_path=TRC_RAW_PATH / 'raw_text' / raw_text_name,
+    #                         #  prompt_path=TRC_RAW_PATH / 'prompts' / method / prompt_filename,
+    #                         results_path=llm_response_path,
+    #                         prompt_params=prompt_params, 
+    #                         prompt_template=prompt)
+
     # results_df = pd.DataFrame({'doc_id': res['doc_id'], 'trail': res['trail'], 'response': res['response']} for res in resluts)
 
     all_parsed_response_df = pd.DataFrame(columns=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2',
@@ -62,9 +69,9 @@ def main(model_name: str, method: str, model: LLModel,  prompt_params: List[str]
     data = []
     for idx, row in results_df.iterrows():
         if isinstance(prompt, PairwisePrompt):
-            true_labels = [row.true_label]
+            true_labels = [row.true_label.upper()] if 'true_label' in row else ['NO_TRUE_LABEL']
         else:
-            true_labels = row.true_label
+            true_labels = row.true_label.upper() if 'true_label' in row else 'NO_TRUE_LABEL'
 
         if isinstance(row.response, str):
             p_label = row.response.upper()
@@ -83,7 +90,7 @@ def main(model_name: str, method: str, model: LLModel,  prompt_params: List[str]
                 'model_name': model_name,
                 'iter': row.trail, 
                 'prompt': row.prompt,
-                'raw_response': row.content
+                'raw_response': row.content if 'content' in row else row.response
             })
     all_parsed_response_df = pd.DataFrame(data)
         
@@ -104,7 +111,8 @@ def main(model_name: str, method: str, model: LLModel,  prompt_params: List[str]
 
     # parse model responses
     min_votes: int = 3
-    majority_vote_decision(parsed_response_path, results_path, min_votes)
+    selected_relations_df = majority_vote_decision_new(parsed_response_path, results_path, min_votes)
+
     return results_path
 
 def get_summary_results(model_name: str, method: str, labeled_path: Path, results_path: Path, suffix_path: str = '') -> pd.DataFrame:
@@ -112,11 +120,13 @@ def get_summary_results(model_name: str, method: str, labeled_path: Path, result
 
     gold_df = load_data(labeled_path)
     non_vague_gold_df = gold_df[gold_df['label'] != 'VAGUE']
+    results_df = pd.read_csv(results_path)
+    results_df = pd.merge(results_df, non_vague_gold_df[['docid', 'unique_id']], how='inner',
+                         on=['docid', 'unique_id']).drop_duplicates(['docid', 'unique_id'])
 
-    # try:
-    df = summary_results(results_path,
+    df = summary_results(results_df,
                          non_vague_gold_df,
-                         model_name)
+                         model_name + '-matres')
     df['method'] = method
     df['suffix_path'] = suffix_path
     df['model_name'] = model_name
@@ -124,7 +134,7 @@ def get_summary_results(model_name: str, method: str, labeled_path: Path, result
 
 
 if __name__ == '__main__':
-    gpu_device = 1
+    gpu_device = 2
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     # os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'  # for mistralai
@@ -135,10 +145,12 @@ if __name__ == '__main__':
     name = 'te3-platinum'
     labeled_df_name = 'platinum.txt'
 
-    mode = 'pair'
+    # mode = 'pair'
     # mode = 'multi'
+    mode = 'comb'
 
-    method = 'zero-shot'
+    methods = ['zero-shot', 'few-shot']
+    # method = 'zero-shot'
     # method = 'few-shot'
 
     # prompt_filename = 'graph-generation-v1.txt'
@@ -150,9 +162,6 @@ if __name__ == '__main__':
     # prompt_filename = 'graph-generation-v2.txt'
     prompt_params = ['text', 'relations']
     suffix_path = 'completion'
-    is_few_shot = (method == 'few-shot')
-    prompt = MultiEvents(use_few_shot=is_few_shot, use_vague=False, provide_justification=False)
-    # prompt = PairwisePrompt(use_few_shot=is_few_shot, use_vague=False)
 
     # prompt_filename = 'graph-generation-v3.txt'
     # prompt_params = ['text', 'relations']
@@ -173,27 +182,41 @@ if __name__ == '__main__':
     # model_name = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
     # model = TogetherAIClient(model_name)
     
-    model_names = ["meta-llama/Llama-3.2-3B-Instruct"]  # "meta-llama/Llama-3.1-8B-Instruct", 
+    model_names = ["meta-llama/Llama-3.1-8B-Instruct", "meta-llama/Llama-3.2-3B-Instruct"] 
     # model_names = ['mistralai/Mistral-7B-Instruct-v0.3']
+
+    model_names = ['gpt-4o-mini'] 
 
     for model_name in model_names:
     # model_name = "meta-llama/Llama-3.2-3B-Instruct"
-        model = HuggingfaceClient(model_name=model_name, device=gpu_device)
+        for method in methods:
+            is_few_shot = (method == 'few-shot')
+            # prompt = MultiEvents(use_few_shot=is_few_shot, use_vague=False, provide_justification=False)
+            prompt = PairwisePrompt(use_few_shot=is_few_shot, use_vague=False)
 
-        """
-        train - timebank.txt
-        valid - aquaint.txt
-        test - platinum.txt
-        """
+            # model = HuggingfaceClient(model_name=model_name, device=gpu_device)
+            model = OpenAIClient(model_name=model_name)
 
-        results_path = main(model_name, method, model, prompt_params,
-            raw_text_name=raw_text_name, suffix_path=suffix_path, data_name=name, mode=mode, prompt=prompt)
+            """
+            train - timebank.txt
+            valid - aquaint.txt
+            test - platinum.txt
+            """
 
-        results_df = get_summary_results(model_name, method,
-                                    labeled_path=MATRES_DATA_PATH / labeled_df_name,
-                                    results_path=results_path,
-                                    suffix_path=suffix_path)
+            results_path = main(model_name, method, model, prompt_params,
+                raw_text_name=raw_text_name, suffix_path=suffix_path, data_name=name, mode=mode, prompt=prompt)
 
-        results_metrics_path = TRC_RAW_PATH / 'final_metrics' / method / results_path.name
-        results_metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        results_df.to_csv(results_metrics_path, index=False)
+            results_df = get_summary_results(model_name, method,
+                                        labeled_path=MATRES_DATA_PATH / labeled_df_name,
+                                        results_path=results_path,
+                                        suffix_path=suffix_path)
+
+            results_metrics_path = TRC_RAW_PATH / 'final_metrics' / method / results_path.name
+            results_metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            results_df.to_csv(results_metrics_path, index=False)
+            
+            # del model
+            # torch.cuda.empty_cache()
+            # gc.collect()
+            print(f'writing results to {results_metrics_path}')
+            print('-' * 50)
