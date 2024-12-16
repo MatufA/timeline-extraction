@@ -7,23 +7,31 @@ from functools import partial
 
 
 class Graph:
-    def __init__(self, supported_relation=('AFTER', 'BEFORE'), relation_key: str = 'relation'):
+    def __init__(self, supported_relation=('AFTER', 'BEFORE'), relation_key: str = 'relation', add_verb_names: bool = False):
         self.supported_relation = supported_relation
         self.relation_key = relation_key
+        self.add_verb_names = add_verb_names
 
     def create_edges(self, df):
         edges_df = pd.DataFrame()
         edges_df[['source', 'target']] = df[['docid', 'eiid1', 'eiid2', self.relation_key]] \
-            .apply(lambda row: (f"{row.docid}-{row['eiid2']}", f"{row.docid}-{row['eiid1']}")
-        if row[self.relation_key] == 'AFTER' else (f"{row.docid}-{row['eiid1']}", f"{row.docid}-{row['eiid2']}"),
+            .apply(lambda row: (f"{row.docid}-{row['eiid2']}", f"{row.docid}-{row['eiid1']}") 
+                   if row[self.relation_key] == 'AFTER' 
+                   else (f"{row.docid}-{row['eiid1']}", f"{row.docid}-{row['eiid2']}"),
                    axis='columns', result_type="expand")
         return edges_df
 
     def create_nodes(self, df):
-        nodes_raw_df = df.apply(
-            lambda row: [dict(docid=row.docid, verb=row.verb1, eiid=f"{row.docid}-{row.eiid1}", eid=row.eiid1),
-                         dict(docid=row.docid, verb=row.verb2, eiid=f"{row.docid}-{row.eiid2}", eid=row.eiid2)],
-            axis='columns').to_list()
+        if self.add_verb_names:
+            nodes_raw_df = df.apply(
+                lambda row: [dict(docid=row.docid, verb=row.verb1, eiid=f"{row.docid}-{row.eiid1}", eid=row.eiid1),
+                            dict(docid=row.docid, verb=row.verb2, eiid=f"{row.docid}-{row.eiid2}", eid=row.eiid2)],
+                axis='columns').to_list()
+        else:
+            nodes_raw_df = df.apply(
+                lambda row: [dict(docid=row.docid, eiid=f"{row.docid}-{row.eiid1}", eid=row.eiid1),
+                            dict(docid=row.docid, eiid=f"{row.docid}-{row.eiid2}", eid=row.eiid2)],
+                axis='columns').to_list()
         nodes_flatten = reduce(lambda x, y: x + y, nodes_raw_df)
         return pd.DataFrame(nodes_flatten).drop_duplicates(ignore_index=True)
 
@@ -35,8 +43,11 @@ class Graph:
         # G = nx.DiGraph()
         G = nx.from_pandas_edgelist(edges, create_using=nx.DiGraph)
         nx.set_node_attributes(G, dict(zip(nodes.eiid, nodes.docid)), 'docid')
-        nx.set_node_attributes(G, dict(zip(nodes.eiid, nodes.verb)), 'verb')
         nx.set_node_attributes(G, dict(zip(nodes.eiid, nodes.eid)), 'eid')
+        
+        if self.add_verb_names:
+            nx.set_node_attributes(G, dict(zip(nodes.eiid, nodes.verb)), 'verb')
+        
         return G
 
     def generate_subgraph_by_docid(self, graph, doc_id):
