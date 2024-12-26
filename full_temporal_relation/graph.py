@@ -1,16 +1,20 @@
 from functools import reduce
 import networkx as nx
 import pandas as pd
+import logging
 
-from itertools import chain, product, starmap
+from itertools import chain, combinations, product, starmap
 from functools import partial
 
 
 class Graph:
-    def __init__(self, supported_relation=('AFTER', 'BEFORE'), relation_key: str = 'relation', add_verb_names: bool = False):
+    def __init__(self, supported_relation=('AFTER', 'BEFORE'), relation_key: str = 'relation', 
+                 add_verb_names: bool = False, use_equal: bool = False):
         self.supported_relation = supported_relation
         self.relation_key = relation_key
         self.add_verb_names = add_verb_names
+        self.use_equal = use_equal
+        self.equal_mapping = {}
 
     def create_edges(self, df):
         edges_df = pd.DataFrame()
@@ -34,13 +38,38 @@ class Graph:
                 axis='columns').to_list()
         nodes_flatten = reduce(lambda x, y: x + y, nodes_raw_df)
         return pd.DataFrame(nodes_flatten).drop_duplicates(ignore_index=True)
+    
+    def _fit_df_to_equal(self, df):
+        self.equal_mapping = {}
+        equal_df = df.loc[df[self.relation_key] == 'EQUAL', ['eiid1', 'eiid2']]
+        for _, row in equal_df.iterrows():
+            key = f'{row.eiid1}${row.eiid2}'
+
+            eiids = [row.eiid1, row.eiid2]
+
+            for eiid in eiids:
+                if eiid in self.equal_mapping:
+                    old_key_set = list(set(self.equal_mapping[eiid].split('$') + eiids))
+                    key = '$'.join(sorted(old_key_set))
+                else:
+                    key = '$'.join(sorted(eiids))
+
+                self.equal_mapping[eiid] = key
+
+        return df.replace({'eiid1': self.equal_mapping, 'eiid2': self.equal_mapping})
+
 
     def generate_directed_graph(self, df):
+        if self.use_equal:
+            if 'EQUAL' in self.supported_relation:
+                df = self._fit_df_to_equal(df)
+                df = df[df[self.relation_key]!='EQUAL']
+            else:
+                logging.error("'EQUAL' not in supported relation, ignoring it.")
         df = df.loc[df[self.relation_key].isin(self.supported_relation)]
         edges = self.create_edges(df)
         nodes = self.create_nodes(df)
 
-        # G = nx.DiGraph()
         G = nx.from_pandas_edgelist(edges, create_using=nx.DiGraph)
         nx.set_node_attributes(G, dict(zip(nodes.eiid, nodes.docid)), 'docid')
         nx.set_node_attributes(G, dict(zip(nodes.eiid, nodes.eid)), 'eid')
@@ -78,6 +107,45 @@ class Graph:
                 print(group)
 
         return cycles
+    
+    def generate_implicit_relations(self, df: pd.DataFrame):
+        self.use_equal = True
+
+        if 'EQUAL' not in self.supported_relation:
+            self.supported_relation.append('EQUAL')
+        
+        data = []
+        for doc_id, group_df in df.groupby('docid'): 
+            self.equal_mapping = {}
+            doc_graph: nx.DiGraph = self.generate_directed_graph(group_df)
+            ids_groups = list(set(group_df.eiid1) | set(group_df.eiid2))
+            rel_combs = combinations(ids_groups, 2)
+            for (e1, e2) in rel_combs:
+                e1 = min(e1, e2)
+                e2 = max(e1, e2)
+                
+                e1 = self.equal_mapping.get(e1, e1)
+                e2 = self.equal_mapping.get(e2, e2)
+
+                if nx.shortest_path(doc_graph, source=e1, target=e2):
+                    relation = 'BEFORE'
+                elif nx.shortest_path(doc_graph, source=e2, target=e1):
+                    relation = 'AFTER'
+                else:
+                    relation = 'VAGUE'
+                
+                e1_split = e1.split('$')
+                e2_split = e2.split('$')
+                for eiid1, eiid2 in product(e1_split, e2_split):
+                    data.append((doc_id, eiid1, eiid2, relation))
+        
+        df = pd.DataFrame(data, columns=['doc_id', 'eiid1', 'eiid2', 'relation'])
+        # df['relation'] = df.relation.str.split('$')
+        # df = df.explode('relation').reset_index(drop=True)
+        
+        eiid1_eiid2 = list(zip(df['eiid1'], df['eiid2']))
+        df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
+        return df
 
 
 def create_simple_graph(graph):
@@ -122,3 +190,26 @@ def create_simple_graph(graph):
         nx.add_path(simple_graph, path)
 
     return simple_graph, simple_edges
+
+if __name__ == '__main__':
+    from pathlib import Path
+    from data.preprocessing import load_data
+    from visualization.graph import draw_directed_graph
+
+    DATA_PATH = Path('./data')
+    MATRES_DATA_PATH = DATA_PATH / 'MATRES'
+    PLATINUM_RAW = MATRES_DATA_PATH / 'raw' / 'TBAQ-cleaned' / 'te3-platinum'
+    gold_data_path = MATRES_DATA_PATH / 'platinum.txt'
+
+    graph_example = DATA_PATH / 'graph_exploration'
+
+    gold_df = load_data(gold_data_path)
+    graph = Graph(use_equal=True, supported_relation=['AFTER', 'BEFORE', 'EQUAL'])
+
+    for docid, group in gold_df.groupby('docid'):
+        doc_graph = graph.generate_directed_graph(group)
+        plt_graph = draw_directed_graph(doc_graph, label_name='eid')
+        plt_graph.savefig(graph_example / f'{docid}.png')
+    
+    print('Done!')
+
