@@ -22,11 +22,7 @@ class MultiEvents(Prompt):
         equal - both verbs happened together.
         {"vague - It is impossible to know based on the context provided" if self.use_vague else ""}
 
-        All responses should be a valide compact json format.
-        The output json format must contains the following keys:
-        event1 - the first relation, should be the lower #ID
-        event2 - teh second relation, should be the higher #ID
-        relation - the relation classification from the listed potential labels above 
+        All responses should be valid and compact dot graph format.
         """
 
         self.few_shot = """
@@ -51,17 +47,19 @@ class MultiEvents(Prompt):
         ---
         """
 
-        self.instruction = """Respond only with valid JSON. Do not write an introduction or summary.
-        the list of pairs are: [{"""
+        self.instruction = """Respond only with valid dot graph formate. Do not write an introduction or summary.
+        the graph:"""
 
     def generate_prompt(self, text: str, relations: Optional[str] = None):
         assert text is not None, "text not provided"
 
         full_prompt = self.system
         few_shot_examples = """
-                [{"event1":"1", "event2":"2", "relation": "before"},
-                {"event1":"3", "event2":"12", "relation": "after"}
-                """ + ',{"event1":"4", "event2":"5", "relation": "vague"}]' if self.use_vague else "]" 
+                digraph {
+                    "EVENT1" -> "EVENT2" [label="before"];
+                    "EVENT3" -> "EVENT12" [label="after"];
+                """
+        few_shot_examples += '"EVENT4" -> "EVENT5" [label="vague"];\n}' if self.use_vague else "}"
 
         if self.provide_justification:
             full_prompt = full_prompt + "\njustification - justify your classification from the provided text, explain in one short sentences"
@@ -85,10 +83,11 @@ class MultiEvents(Prompt):
 
         system_content = self.system
         few_shot_examples = """
-                [
-                {"event1":"1", "event2":"2", "relation": "before"},
-                {"event1":"3", "event2":"12", "relation": "after"}
-                """ + ',{"event1":"4", "event2":"5", "relation": "vague"}]' if self.use_vague else "]" 
+                digraph {
+                    "EVENT1" -> "EVENT2" [label="before"];
+                    "EVENT3" -> "EVENT12" [label="after"];
+                """
+        few_shot_examples += '"EVENT4" -> "EVENT5" [label="vague"];\n}' if self.use_vague else "}"
 
         if self.provide_justification:
             system_content = system_content + "\njustification - justify your classification from the provided text, explain in one short sentences"
@@ -125,7 +124,7 @@ class PairwisePrompt(Prompt):
         before - the first verb happened before the second.
         after - the first verb happened after the second.
         equal - both verbs happened together.
-        {"vague - It is impossible to know based on the context provided" if self.use_vague else ""}
+        {"vague - otherwise" if self.use_vague else ""}
 
         you should only provide one classification.
         """

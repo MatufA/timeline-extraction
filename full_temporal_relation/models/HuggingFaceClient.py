@@ -3,14 +3,15 @@ import logging
 import torch
 from full_temporal_relation.models.LLModel import LLModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from tqdm.auto import tqdm, trange
 
 from transformers import pipeline
 
 
 class HuggingfaceClient(LLModel):
-    def __init__(self, model_name: str, device: int, n_trails: int = 5):
+    def __init__(self, model_name: str, device: int, *args, **kwargs):
         self.model_name: str = model_name
-        super().__init__(None, each_trail=False, each_doc=False, n_trails=n_trails)
+        super().__init__(None, each_trail=False, each_doc=False, *args, **kwargs)
         self.pipe = pipeline("text-generation", 
                              model=model_name, 
                              torch_dtype=torch.float16, 
@@ -23,26 +24,34 @@ class HuggingfaceClient(LLModel):
                     "content": prompt,
                 }
             ] if isinstance(prompt, str) else prompt
-        return self.pipe(
+        responses = []
+        for _ in trange(self.n_trails, desc=f'Processing record:', position=1, leave=False):
+            response = self.pipe(
             messages
-            , max_new_tokens=500
+            , max_new_tokens=8000
             , pad_token_id=self.pipe.tokenizer.eos_token_id
-        )
+            )
+            responses.append(response)
+        return responses
 
     def prepare_response(self, response):
-        content = response[0]['generated_text'][-1]['content']
-        try:
-            response = json.loads(content.replace('\n', ''))
-        except json.JSONDecodeError as e:
-            try:
-                response = json.loads(content.replace(',\n', '').replace('\n', ''))
-            except json.JSONDecodeError as e:
-                response = content
+        responses = []
+        for trail, res in enumerate(response):
+            content = res[0]['generated_text'][-1]['content']
+            # try:
+            #     res = json.loads(content.replace('\n', ''))
+            # except json.JSONDecodeError as e:
+            #     try:
+            #         res = json.loads(content.replace(',\n', '').replace('\n', ''))
+            #     except json.JSONDecodeError as e:
+            #         res = content
 
-        return {
+            responses.append({
             'content': content,
-            'response': response
-        }
+            'response': res, 
+            'trail': trail
+        })
+        return responses
 
 
 if __name__ == '__main__':
