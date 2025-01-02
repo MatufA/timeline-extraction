@@ -152,7 +152,7 @@ def majority_vote_decision_new(parsed_response_path: Path, results_path: Path, m
     df = pd.read_csv(parsed_response_path)
     
     # Group by docid, unique_id, and label, count votes
-    vote_counts = df.groupby(['docid', 'unique_id', 'relation']).size().reset_index(name='vote_count')
+    vote_counts = df.groupby(['docid', 'unique_id', 'p_label']).size().reset_index(name='vote_count')
     
     # Find rows with at least min_votes
     qualified_votes = vote_counts[vote_counts['vote_count'] >= min_votes]
@@ -161,9 +161,9 @@ def majority_vote_decision_new(parsed_response_path: Path, results_path: Path, m
     majority_labels = qualified_votes.loc[qualified_votes.groupby(['docid', 'unique_id'])['vote_count'].idxmax()]
     
     # Merge back with original dataframe to get full row details
-    filtered_df = pd.merge(df.drop_duplicates(subset=['docid', 'unique_id', 'relation']), 
-                           majority_labels[['docid', 'unique_id', 'relation']], 
-                           on=['docid', 'unique_id', 'relation'], 
+    filtered_df = pd.merge(df.drop_duplicates(subset=['docid', 'unique_id', 'p_label']), 
+                           majority_labels[['docid', 'unique_id', 'p_label']], 
+                           on=['docid', 'unique_id', 'p_label'], 
                            how='inner')
     
     # Save the filtered results
@@ -211,3 +211,42 @@ def majority_vote_decision(parsed_response_path: Path, results_path: Path, min_v
 
     final_df.to_csv(results_path, index=False)
     return final_df
+
+
+if __name__ == "__main__":
+    from full_temporal_relation.pipeline import generate_suffix_name
+
+
+    DATA_PATH = Path('./data')
+    MATRES_DATA_PATH = DATA_PATH / 'MATRES'
+    PLATINUM_RAW = MATRES_DATA_PATH / 'raw' / 'TBAQ-cleaned' / 'te3-platinum'
+    gold_data_path = MATRES_DATA_PATH / 'platinum.txt'
+    TRC_RAW_PATH = DATA_PATH / 'TRC'
+    GRAPH_BASE_PATH = DATA_PATH / 'graph_exploration'
+
+    gold_df = load_data(gold_data_path)
+    gold_subcolumn_df = gold_df[['docid', 'eiid1', 'eiid2', 'label']].copy()
+    gold_subcolumn_df.columns = ['doc_id', 'event1', 'event2', 'relation']
+    gold_relation_dict = gold_subcolumn_df.to_dict(orient='records')
+
+    with (GRAPH_BASE_PATH / 'platinum_graph').open('w') as gold_file:
+        gold_file.write(json.dumps(gold_relation_dict))
+    
+    data_name = 'te3-platinum'
+    
+    # modes = 'pair'
+    mode = 'multi'
+    # mode = 'comb'
+    
+    use_vague = True
+    
+    methods = ['zero-shot', 'few-shot']
+    model_names = ['gpt-4o-mini'] 
+
+    suffix_path = 'completion'
+
+    for model_name in model_names:
+        for method in methods:
+            suffix_name = generate_suffix_name(model_name, method, suffix_path, use_vague)
+            parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / method / f'{mode}-{data_name}-results-{suffix_name}.csv'
+            model_response_df = pd.DataFrame(parsed_response_path)
