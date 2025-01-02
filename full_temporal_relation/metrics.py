@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -6,6 +7,47 @@ from sklearn.metrics import precision_recall_fscore_support, classification_repo
 
 from full_temporal_relation.data.preprocessing import load_data
 from full_temporal_relation.graph import Graph
+import networkx as nx
+
+
+def compare_implicit_relations(model_results_df: pd.DataFrame, gold_df: pd.DataFrame):
+    relations = gold_df.label.unique().tolist()
+    relations_results = []
+    
+    for docid, group in model_results_df.groupby('docid'):
+        graph = Graph(use_equal=True, supported_relation=['AFTER', 'BEFORE', 'EQUAL'], relation_key='p_label')
+        doc_graph = graph.generate_directed_graph(group)
+        
+        for idx, row in gold_df[gold_df.docid == docid].iterrows():
+
+            e1 = min(row.eiid1, row.eiid2)
+            e2 = max(row.eiid1, row.eiid2)
+            
+            e1_name = f'{row.docid}-{graph.equal_mapping.get(e1, e1)}'
+            e2_name = f'{row.docid}-{graph.equal_mapping.get(e2, e2)}'
+
+            try:
+                if e1 in graph.equal_mapping and e2 in graph.equal_mapping:
+                    relation = 'EQUAL'
+                elif nx.has_path(doc_graph, source=e1_name, target=e2_name):
+                    relation = 'BEFORE'
+                elif nx.has_path(doc_graph, source=e2_name, target=e1_name):
+                    relation = 'AFTER'
+                else:
+                    relation = 'VAGUE'
+            except nx.exception.NodeNotFound as e:
+                logging.warning(f'{e}, Mark as VAGUE')
+                relation = 'VAGUE'
+
+            relations_results.append({'eiid1': e1, 
+                                      'eiid2': e2, 
+                                      'docid': docid, 
+                                      'p_label_for_eval': relation, 
+                                      'label': row.label, 
+                                      'unique_id': row.unique_id
+                                      })
+    
+    return pd.DataFrame(relations_results)
 
 
 def summary_results(model_results_df: pd.DataFrame, gold_df: pd.DataFrame, model_name: str, target_col:str='label'):
@@ -34,6 +76,8 @@ def summary_results(model_results_df: pd.DataFrame, gold_df: pd.DataFrame, model
     df_results.loc[no_preds_mask, 'p_label_for_eval'] = df_results[no_preds_mask].apply(
         lambda row: np.choose(1, list(set(relations) - set([row.label]))), 
         axis='columns')
+    
+    # joined_df = compare_implicit_relations(model_results_df, gold_df)
 
     joined_df = pd.merge(df_results, gold_df[['docid', 'unique_id', 'label']], how='right',
                          on=['docid', 'unique_id',], suffixes=('_old', None))
@@ -195,7 +239,7 @@ def correct_consistency_rate(df_predicted: pd.DataFrame, df_true: pd.DataFrame) 
 
 
 def get_n_graph_cycles(df: pd.DataFrame, relation_key: str) -> dict:
-    return {k: len(v) for k, v in Graph(relation_key=relation_key).find_cycles(df).items()}
+    return {k: len(v) for k, v in Graph(use_equal=True, relation_key=relation_key).find_cycles(df).items()}
 
 
 if __name__ == '__main__':
