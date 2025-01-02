@@ -66,7 +66,13 @@ class Graph:
                 df = df[df[self.relation_key]!='EQUAL']
             else:
                 logging.error("'EQUAL' not in supported relation, ignoring it.")
+
         df = df.loc[df[self.relation_key].isin(self.supported_relation)]
+
+        if df.empty:
+            logging.warning('there is no supported relation in datafarme ot it empty, return empty graph')
+            return nx.DiGraph()
+
         edges = self.create_edges(df)
         nodes = self.create_nodes(df)
 
@@ -201,15 +207,17 @@ if __name__ == '__main__':
     PLATINUM_RAW = MATRES_DATA_PATH / 'raw' / 'TBAQ-cleaned' / 'te3-platinum'
     gold_data_path = MATRES_DATA_PATH / 'platinum.txt'
 
-    graph_example = DATA_PATH / 'graph_exploration'
+    graph_example = DATA_PATH / 'graph_exploration' / 'te3-platinum-simple-graph'
 
     gold_df = load_data(gold_data_path)
     graph = Graph(use_equal=True, supported_relation=['AFTER', 'BEFORE', 'EQUAL'])
 
     for docid, group in gold_df.groupby('docid'):
         doc_graph = graph.generate_directed_graph(group)
-        plt_graph = draw_directed_graph(doc_graph, label_name='eid')
+        doc__simple_graph, _ = create_simple_graph(doc_graph)
+        plt_graph = draw_directed_graph(doc__simple_graph, label_name='eid', cycles_only=False)
         plt_graph.savefig(graph_example / f'{docid}.png')
+        plt_graph.clf()
     
     print('Done!')
 
