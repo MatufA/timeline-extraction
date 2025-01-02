@@ -31,7 +31,7 @@ class Parser:
         pass
 
 class LabelParser(Parser):
-    def __call__(self, model_response, *args, **kwargs):
+    def __call__(clf, model_response, *args, **kwargs):
         start_pattern = r'^(before|after|equal|vague)\b'
         end_pattern = r'\b(before|after|equal|vague)(?:[.!?]|\s*$)'
         if start_label_match := re.search(start_pattern, model_response['response'].lower()):
@@ -45,7 +45,7 @@ class LabelParser(Parser):
         return model_response
     
 class JsonParser(Parser):
-    def __call__(self, model_response, *args, **kwargs):
+    def __call__(clf, model_response, *args, **kwargs):
         if isinstance(model_response['response'], list) and isinstance(model_response['response'][0], dict):
             formated_response = model_response['response']
         else:
@@ -127,8 +127,9 @@ class LLModel(abc.ABC):
             prompt_params = ['text']
 
         records = json.load(text_path.open('r'))
-        with checkpoint_results.open('w') as clean_file:
-            clean_file.write('')
+        if checkpoint_results:
+            with checkpoint_results.open('w') as clean_file:
+                clean_file.write('')
 
         new_records = []
         if 'relations' in prompt_params:
@@ -184,7 +185,10 @@ class LLModel(abc.ABC):
                             choice_result['doc_id'] = record['doc_id']
                             choice_result['prompt'] = prompt
                             choice_result['raw_content'] = choice.message.content
-                            choice_result['relations'] = parse_dot_graph(dot_graph=choice.message.content)
+                            if isinstance(self.parser, LabelParser):
+                                choice_result['relations'] = choice.message.content
+                            else: 
+                                choice_result['relations'] = parse_dot_graph(dot_graph=choice.message.content)
                             j_line = json.dumps(choice_result)
                             c_file.write(j_line + '\n')
 
@@ -197,8 +201,9 @@ class LLModel(abc.ABC):
                         parsed_response = [parsed_response]
 
                     for p_response in parsed_response:
-                        res['response'] = p_response['relation']
-                        if len(res['relations']) > 1:
+                        if not isinstance(self.parser, LabelParser):
+                            res['response'] = p_response['relation']
+                        # if len(res['relations']) > 1:
                             events = [p_response['event1'], p_response['event2']]
                             res['relations'] = [events]
                         # if isinstance(prompt_template, PairwisePrompt) and not isinstance(res['response'], dict) :
