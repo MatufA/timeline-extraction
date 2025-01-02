@@ -32,8 +32,9 @@ def load_data(path: Union[str, Path]) -> pd.DataFrame:
     df.eiid1 = 'ei' + df.eiid1.astype(str)
     df.eiid2 = 'ei' + df.eiid2.astype(str)
 
-    mask = df['relation'] == 'after'
+    mask = df['relation'] == 'AFTER'
     df.loc[mask, ['verb1', 'verb2']] = df.loc[mask, ['verb2', 'verb1']].values
+    df.loc[mask, ['eiid1', 'eiid2']] = df.loc[mask, ['eiid2', 'eiid1']].values
     df['label'] = df['relation'].copy()
     df['relation'] = df['relation'].replace('AFTER', 'BEFORE')
 
@@ -42,7 +43,8 @@ def load_data(path: Union[str, Path]) -> pd.DataFrame:
 
     return df
 
-def generate_all_comb_training_dataset(docs_dir: Union[str, Path], output_path: Path, window: int = 2) -> pd.DataFrame:
+def generate_all_comb_training_dataset(docs_dir: Union[str, Path], output_path: Path, window: int = 2, 
+                                       is_full_text: bool = False) -> pd.DataFrame:
     docs = [Doc(path) for path in Path(docs_dir).glob('*.tml')]
     ei_regex = r'(ei\d+):\w+\s*'
     
@@ -72,7 +74,10 @@ def generate_all_comb_training_dataset(docs_dir: Union[str, Path], output_path: 
                         min_idx = min(event_dict[comb[0]], event_dict[comb[1]])
                         max_idx = max(event_dict[comb[0]], event_dict[comb[1]])
 
-                        train_text = '\n'.join(lines[min_idx: max_idx+1])
+                        if is_full_text:
+                            train_text = full_text
+                        else:
+                            train_text = '\n'.join(lines[min_idx: max_idx+1])
 
                         relation_history.add(tuple(comb))  
                         doc_relations.append({
@@ -195,9 +200,10 @@ if __name__ == '__main__':
     MATRES_PATH = DATA_PATH / 'MATRES'
     DOCS_DIRS_PATH = MATRES_PATH / 'raw' / 'TBAQ-cleaned'
 
-    BASE_NAMES = ['te3-platinum'] # 'AQUAINT', 'TimeBank', 
-    BASE_DF_PATHS = ['platinum.txt'] # 'aquaint.txt', 'timebank.txt', 
-    modes = ['comb'] # 'pair', 'multi', 
+    BASE_NAMES = ['AQUAINT', 'TimeBank', 'te3-platinum'] #  
+    BASE_DF_PATHS = ['aquaint.txt', 'timebank.txt', 'platinum.txt'] # 
+    modes = ['pair'] # 'pair', 'multi', 
+    is_full_text = False
 
     for mode in modes: 
 
@@ -210,12 +216,17 @@ if __name__ == '__main__':
 
         for name, df_name in zip(BASE_NAMES, BASE_DF_PATHS):
             output_file = output / f'{mode}-{name}.csv'
-            jsonl_out_path = DATA_PATH/'TRC'/'raw_text'/f'{mode}_{name.lower()}_text_w_relations_prepared.json'
+
+            context_ref = 'full_context' if is_full_text else 'minimal_context'
+            jsonl_out_name = f'{mode}_{name.lower()}_{context_ref}_text_w_relations_prepared.json'
+            jsonl_out_path = DATA_PATH/'TRC'/'raw_text'/jsonl_out_name
 
             if mode == 'comb':
+
                 df = generate_all_comb_training_dataset(docs_dir=DOCS_DIRS_PATH / name, 
                                                     output_path=jsonl_out_path,
-                                                    window=2)
+                                                    window=2, 
+                                                    is_full_text=is_full_text)
             else:
                 if not output_file.exists():
                     gold_df = load_data(MATRES_PATH / df_name)
