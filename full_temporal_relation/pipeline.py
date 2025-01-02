@@ -124,18 +124,20 @@ def main(model_name: str, method: str, model: LLModel,  prompt_params: List[str]
 
     return results_path
 
-def get_summary_results(model_name: str, method: str, labeled_path: Path, results_path: Path, suffix_path: str = '') -> pd.DataFrame:
+def get_summary_results(model_name: str, method: str, labeled_path: Path, results_path: Path, 
+                        suffix_path: str = '', use_vague: bool = True) -> pd.DataFrame:
     result_file_suffix = generate_suffix_name(model_name, method, suffix_path)
 
     gold_df = load_data(labeled_path)
-    # non_vague_gold_df = gold_df[gold_df['label'] != 'VAGUE']
-    non_vague_gold_df = gold_df
+    if not use_vague:
+        gold_df = gold_df[gold_df['label'] != 'VAGUE']
+
     results_df = pd.read_csv(results_path)
-    results_df = pd.merge(results_df, non_vague_gold_df[['docid', 'unique_id']], how='inner',
+    results_df = pd.merge(results_df, gold_df[['docid', 'unique_id']], how='inner',
                          on=['docid', 'unique_id']).drop_duplicates(['docid', 'unique_id'])
 
     df = summary_results(results_df,
-                         non_vague_gold_df,
+                         gold_df,
                          model_name)
     df['method'] = method
     df['suffix_path'] = suffix_path
@@ -155,9 +157,9 @@ if __name__ == '__main__':
     name = 'te3-platinum'
     labeled_df_name = 'platinum.txt'
 
-    # mode = 'pair'
-    mode = 'multi'
-    # mode = 'comb'
+    # mode = 'pair'  # all paires within minimal context
+    # mode = 'multi'  # all labels within minimal context
+    mode = 'comb'  # all posible paires in 2 line a part context
 
     methods = ['zero-shot', 'few-shot']
     # method = 'zero-shot'
@@ -180,7 +182,13 @@ if __name__ == '__main__':
 
     # raw_text_name = 'platinum_text_prepared.json'
     # raw_text_name = 'platinum_text_w_relations_prepared.json'
-    raw_text_name = f'{mode}_{name.lower()}_text_w_relations_prepared.json'
+
+    if mode == 'comb':
+        is_full_text = True
+        context_ref = 'full_context' if is_full_text else 'minimal_context'
+        raw_text_name = f'{mode}_{name.lower()}_{context_ref}_text_w_relations_prepared.json'
+    else:
+        raw_text_name = f'{mode}_{name.lower()}_text_w_relations_prepared.json'
 
     # model_name = 'llama-3.1-70b-versatile'
     # model = GroqModel(model_name)
@@ -199,15 +207,15 @@ if __name__ == '__main__':
 
     use_vague = True
 
-    # parser_type = LabelParser
-    parser_type = JsonParser
+    parser_type = LabelParser
+    # parser_type = JsonParser
     overwrite=True
 
     for model_name in model_names:
         for method in methods:
             is_few_shot = (method == 'few-shot')
 
-            if isinstance(parser_type, LabelParser):
+            if issubclass(parser_type, LabelParser):
                 prompt = PairwisePrompt(use_few_shot=is_few_shot, use_vague=use_vague)
             else:
                 prompt = MultiEvents(use_few_shot=is_few_shot, use_vague=use_vague, provide_justification=False)
@@ -229,7 +237,8 @@ if __name__ == '__main__':
             results_df = get_summary_results(model_name, method,
                                         labeled_path=MATRES_DATA_PATH / labeled_df_name,
                                         results_path=results_path,
-                                        suffix_path=suffix_path)
+                                        suffix_path=suffix_path, 
+                                        use_vague=use_vague)
 
             results_metrics_path = TRC_RAW_PATH / 'final_metrics' / method / results_path.name
             results_metrics_path.parent.mkdir(parents=True, exist_ok=True)
