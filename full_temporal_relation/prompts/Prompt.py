@@ -57,9 +57,26 @@ class MultiEvents(Prompt):
         few_shot_examples = """
                 digraph {
                     "EVENT1" -> "EVENT2" [label="before"];
+                    "EVENT1" -> "EVENT3" [label="before"];
+                    "EVENT2" -> "EVENT3" [label="before"];
+                    "EVENT1" -> "EVENT12" [label="before"];
+                    "EVENT1" -> "EVENT4" [label="before"];
+                    "EVENT2" -> "EVENT12" [label="before"];
+                    "EVENT2" -> "EVENT4" [label="before"];
                     "EVENT3" -> "EVENT12" [label="after"];
+                    "EVENT3" -> "EVENT4" [label="before"];
+                    "EVENT12" -> "EVENT4" [label="before"];
+                    "EVENT12" -> "EVENT5" [label="before"];
+                    "EVENT4" -> "EVENT5" [label="vague"];
+                    "EVENT5" -> "EVENT8" [label="vague"];
+                    "EVENT5" -> "EVENT9" [label="after"];
+                    "EVENT5" -> "EVENT10" [label="before"];
+                    "EVENT8" -> "EVENT9" [label="after"];
+                    "EVENT8" -> "EVENT10" [label="before"];
+                    "EVENT9" -> "EVENT10" [label="before"];
+                    }
                 """
-        few_shot_examples += '"EVENT4" -> "EVENT5" [label="vague"];\n}' if self.use_vague else "}"
+        # few_shot_examples += '"EVENT4" -> "EVENT5" [label="vague"];\n}' if self.use_vague else "}"
 
         if self.provide_justification:
             full_prompt = full_prompt + "\njustification - justify your classification from the provided text, explain in one short sentences"
