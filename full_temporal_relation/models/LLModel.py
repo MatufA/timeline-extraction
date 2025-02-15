@@ -23,6 +23,15 @@ def parse_dot_graph(dot_graph):
         for match in matches
     ]
 
+    if not relations:
+        edge_pattern = r'"?(e\d+)"?\s*->\s*"?(e\d+)"?\s*\[label="?(.*?)"?\]'
+        matches = re.findall(edge_pattern, dot_graph)
+
+        relations = [
+            {"event1": match[0].replace('e', 'EVENT'), "event2": match[1].replace('e', 'EVENT'), "relation": match[2]}
+            for match in matches
+        ]
+
     return relations
 
 class Parser:
@@ -30,6 +39,9 @@ class Parser:
     def __call__(self, *args, **kwargs):
         pass
 
+class NoParser(Parser):
+    def __call__(self, model_response, *args, **kwargs):
+        return model_response
 class LabelParser(Parser):
     def __call__(clf, model_response, *args, **kwargs):
         start_pattern = r'^(before|after|equal|vague)\b'
@@ -132,8 +144,8 @@ class LLModel(abc.ABC):
                 clean_file.write('')
 
         new_records = []
-        if 'relations' in prompt_params:
-            prompt_params = ['text']
+        # if 'relations' in prompt_params:
+            # prompt_params = ['text']
             # for record in records:
             #     rels = []
             #     for rel in record['relations'].split('\n'):
@@ -196,6 +208,9 @@ class LLModel(abc.ABC):
                 for res in self.prepare_response(response):
                     res.update(record)
                     res['prompt'] = prompt
+                    if not res:
+                        print(f'unable to process res: {response}')
+                        continue
                     parsed_response = self.parser(res)
                     if not isinstance(parsed_response, list):
                         parsed_response = [parsed_response]
