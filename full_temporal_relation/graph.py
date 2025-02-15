@@ -1,4 +1,5 @@
 from functools import reduce
+from pydoc import resolve
 import networkx as nx
 import pandas as pd
 import logging
@@ -114,6 +115,28 @@ class Graph:
 
         return cycles
     
+    def find_simple_cycles(self, df):
+        cycles_list = {}
+        idx = 0
+        for _, group in df.groupby('docid'):
+            if group[self.relation_key].isin(self.supported_relation).count() < 3:
+                continue
+            try:
+                sub_graph = self.generate_directed_graph(df=group)
+                cycles = nx.simple_cycles(sub_graph)
+                for cycle in cycles:
+                    docid = cycle[0].split('-')[0]
+                    if docid in cycles:
+                        cycles_list[docid].append(cycle)
+                    else:
+                        cycles_list[docid] = [cycle]
+            except nx.NetworkXNoCycle:
+                idx += 1
+            except ValueError:
+                print(group)
+
+        return cycles
+    
     def generate_implicit_relations(self, df: pd.DataFrame):
         self.use_equal = True
 
@@ -197,27 +220,98 @@ def create_simple_graph(graph):
 
     return simple_graph, simple_edges
 
+def break_cycles_by_confidence(cycles: list, df: pd.DataFrame) -> pd.DataFrame:
+    for cycle in cycles:
+        cycle_data = [(e1.split('-')[1], e2.split('-')[1], relation) for e1, e2, relation in cycle]
+        cycle_df = pd.DataFrame(cycle_data, columns=['eiid1', 'eiid2', 'relation'])
+        eiid1_eiid2 = list(zip(cycle_df['eiid1'], cycle_df['eiid2']))
+        cycle_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
+        cycle_scores = pd.merge(df[['unique_id', 'probs']], cycle_df, on=['unique_id'])
+        edge_to_drop = cycle_scores.iloc[cycle_scores.probs.argmin()]
+        unique_id = '-'.join(sorted([edge_to_drop['eiid1'], edge_to_drop['eiid2']]))
+
+        df = df.drop(df[df.unique_id == unique_id].index)
+    return df
+    
 if __name__ == '__main__':
     from pathlib import Path
     from data.preprocessing import load_data
     from visualization.graph import draw_directed_graph
+
+    TRC_GLOBAL_VARIABLES = {
+    "LABELS": ["BEFORE", "AFTER", "EQUAL", "VAGUE"],
+    "LABELS_NO_VAGUE": ["BEFORE", "AFTER", "EQUAL"],
+    "LABELS_IDS": [0, 1, 2, 3]
+    }
+    id2label = dict(zip(TRC_GLOBAL_VARIABLES['LABELS_IDS'], TRC_GLOBAL_VARIABLES['LABELS']))
 
     DATA_PATH = Path('./data')
     MATRES_DATA_PATH = DATA_PATH / 'MATRES'
     PLATINUM_RAW = MATRES_DATA_PATH / 'raw' / 'TBAQ-cleaned' / 'te3-platinum'
     gold_data_path = MATRES_DATA_PATH / 'platinum.txt'
 
-    graph_example = DATA_PATH / 'graph_exploration' / 'te3-platinum-simple-graph'
+    graph_example = DATA_PATH / 'graph_exploration' / 'te3-platinum-baseline-graph'
 
-    gold_df = load_data(gold_data_path)
-    graph = Graph(use_equal=True, supported_relation=['AFTER', 'BEFORE', 'EQUAL'])
+    baseline_preds_path = DATA_PATH / 'narrativetime_a1_test_predict_with_probs.csv'
+    baseline_no_cycles_path = DATA_PATH / 'narrativetime_a1_test_predict_baseline_no_cycles_by_probs.csv'
 
-    for docid, group in gold_df.groupby('docid'):
-        doc_graph = graph.generate_directed_graph(group)
-        doc__simple_graph, _ = create_simple_graph(doc_graph)
-        plt_graph = draw_directed_graph(doc__simple_graph, label_name='eid', cycles_only=False)
-        plt_graph.savefig(graph_example / f'{docid}.png')
-        plt_graph.clf()
+    # gold_df = load_data(gold_data_path)
+    gold_df = pd.read_csv(baseline_preds_path)
+    # gold_df = gold_df.rename(columns={'doc_id': 'docid'})
+    # gold_df['relation'] = gold_df.predictions.replace(id2label)
+    # eiid1_eiid2 = list(zip(gold_df['eiid1'], gold_df['eiid2']))
+    # gold_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
+
+    graph = Graph(use_equal=True, supported_relation=['AFTER', 'BEFORE'])
     
+    print(gold_df.shape)
+
+    data = []
+    for docid, cycles in graph.find_cycles(gold_df).items():
+        for cycle in cycles:
+            data.extend([docid, eiid1.split('-')[1], eiid2.split('-')[1]] for eiid1, eiid2, relation in cycle)
+    
+    df_cycles = pd.DataFrame(data, columns=['docid', 'eiid1', 'eiid2'])
+    eiid1_eiid2 = list(zip(df_cycles['eiid1'], df_cycles['eiid2']))
+    df_cycles['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
+
+    # cycle_only_df = pd.merge(gold_df, df_cycles[['docid', 'unique_id']], on=['docid', 'unique_id'], how='inner').drop_duplicates()
+    # cycle_only_df.to_csv(DATA_PATH / 'comb_te3-platinum_minimal_context_predictions_cycles_only.csv', index=False)
+    all_cycles = {}
+    # gold_df = gold_df[gold_df.docid == 'nyt_20130321_china_pollution']
+    while sum(len(v) for v in graph.find_cycles(gold_df).values()) > 0:
+        cycles = {k: v for k, v in graph.find_cycles(gold_df).items()}
+        # print(f'cycles: {cycles}')
+        no_cycle_data = []
+        
+        for docid, group in gold_df.groupby('docid'):
+            if docid in cycles:
+                doc_cycles = cycles[docid]
+                
+                if docid in all_cycles:
+                    all_cycles[docid].extend(doc_cycles)
+                else:
+                    all_cycles[docid] = doc_cycles
+                
+                no_cycle_data.append(break_cycles_by_confidence(cycles=doc_cycles, df=group))
+            else:
+                no_cycle_data.append(group)
+            
+            # doc_graph = graph.generate_directed_graph(group)
+            # doc__simple_graph, _ = create_simple_graph(doc_graph)
+            # plt_graph = draw_directed_graph(doc__simple_graph, label_name='eid', cycles_only=False)
+            # plt_graph.savefig(graph_example / f'{docid}.png')
+            # plt_graph.clf()
+        gold_df = pd.concat(no_cycle_data)
+        print(gold_df.shape)
+        # cycles2 = {k: v for k, v in graph.find_cycles(gold_df).items()}
+        print(f'cycles2: {sum(len(v) for v in graph.find_cycles(gold_df).values())}')
+
+    # import json
+    # output = Path('/home/adiel/full-temporal-relation/data/all_cycles_matres_by_baseline.json')
+    # output.write_text(json.dumps(all_cycles, indent=2))
+    
+    gold_df.to_csv(baseline_no_cycles_path, index=False)
+
     print('Done!')
 
