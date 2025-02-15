@@ -1,5 +1,4 @@
 from functools import reduce
-from pydoc import resolve
 import networkx as nx
 import pandas as pd
 import logging
