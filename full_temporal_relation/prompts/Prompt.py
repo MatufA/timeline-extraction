@@ -1,9 +1,8 @@
 from doctest import Example
-from typing import Optional
+from typing import List, Optional
 
 class Prompt:
     pass
-
 
 class MultiEvents(Prompt):
     def __init__(self, use_vague = True, use_few_shot: bool = False, provide_justification: bool = False):
@@ -23,6 +22,10 @@ class MultiEvents(Prompt):
         {"vague - It is impossible to know based on the context provided" if self.use_vague else ""}
 
         All responses should be valid and compact dot graph format.
+
+        compact meaning:
+        - do not mention transitive dependencies - if ei1 BEFORE ei2 and ei2 BEFORE ei3 don't write ei1 BEFORE ei3
+        - do not mention symmetric relation - if ei1 BEFORE ei2 don't write ei2 AFTER ei1
         """
 
         self.few_shot = """
@@ -47,7 +50,7 @@ class MultiEvents(Prompt):
         ---
         """
 
-        self.instruction = """Respond only with valid dot graph formate. Do not write an introduction or summary.
+        self.instruction = """Respond only with valid dot graph format with the approprite markers and attributes (like label). Do not write an introduction or summary.
         the graph:"""
 
     def generate_prompt(self, text: str, relations: Optional[str] = None):
@@ -141,7 +144,7 @@ class PairwisePrompt(Prompt):
         before - the first verb happened before the second.
         after - the first verb happened after the second.
         equal - both verbs happened together.
-        {"vague - otherwise" if self.use_vague else ""}
+        {"vague - It is impossible to know based on the context provided" if self.use_vague else ""}
 
         you should only provide one classification.
         """
@@ -192,5 +195,128 @@ class PairwisePrompt(Prompt):
         return [
             {"role": "system", "content": system_content},
             {"role": "user", "content": f"{context}\n{self.instruction}"}
+        ]
+    
+class BreakCycleEvents(Prompt):
+    def __init__(self):
+        # self.use_few_shot = use_few_shot
+
+        self.system = f"""
+        Task Overview:
+        You are given a text, in which some events are uniquely marked by [EVENT#ID]event[/EVENT#ID] (e.g., [EVENT1]event1[/EVENT1], [EVENT2]event2[/EVENT2]),
+        and a dot graph which represent chronological order with error, where some edges form cycles.
+        Your task is to decide which pair to drop (by his unique_id), being concise and removing the minimum number of edges.
+        Pay attention, I used classifier to choose the most fitted relation (label attribute in dot graph) 
+        and score which represent the confidence of the classifier.
+
+        relation meaning:
+        before - the first verb happened before the second.
+        after - the first verb happened after the second.
+        equal - both events happen simultaneously
+        vague - temporal order cannot be determined from the context
+        """
+        self.context = """
+        ---
+        Text for Analysis:
+        {text}
+        """
+
+        self.instruction = """Respond only with the unique_id list to drop (wrong label)"""
+
+    @staticmethod
+    def _generate_dot_graph(relation):
+        line_format = '"{eiid1}" -> "{eiid2}" [label="{relation}", score={score}, unique_id={idx}];'
+        return 'digraph Chronology {' + '\n\t'.join(line_format.format(eiid1=rel['eiid1'], 
+                                                                       eiid2=rel['eiid2'], 
+                                                                       relation=rel['relation'], 
+                                                                       score=rel['probs'],
+                                                                       idx=idx) 
+                                                    for idx, rel in enumerate(relation)) + '\n}'
+
+
+    def generate_prompt(self, text: str, relations: List[str] = None):
+        assert text is not None, "text not provided"
+
+        full_prompt = self.system
+    
+        context = self.context.format(text=text) + '\n The inconsistent graph:\n' + self._generate_dot_graph(relations) + '\n---'
+        instruction = self.instruction.format(relations=relations)
+        return f"""{full_prompt} \n{context} \n{instruction}"""
+    
+    def generate_dict_prompt(self, text: str, relations: Optional[str] = None):
+        assert text is not None, "text not provided"
+
+        system_content = self.system
+       
+        context = self.context.format(text=text)  + '\n' + self._generate_dot_graph(relations) + '\n---'
+
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": f"{context}\n{self.instruction}"},
+        ]
+    
+class NTBreakCycleEvents(Prompt):
+    def __init__(self):
+
+        self.system = f"""
+        Task Overview:
+        You are given a text, in which some events are uniquely marked by [EVENT#ID]event[/EVENT#ID] (e.g., [EVENT1]event1[/EVENT1], [EVENT2]event2[/EVENT2]),
+        and a dot graph which represent chronological order with error, where some edges form cycles.
+        Your task is to decide which pair to drop (by his unique_id), being concise and removing the minimum number of edges.
+        Pay attention, I used classifier to choose the most fitted relation (label attribute in dot graph) 
+        and score which represent the confidence of the classifier.
+
+        relation meaning:
+        before - the first verb happened before the second.
+        after - the first verb happened after the second.
+        simultaneous - both events happen simultaneously.
+        vague - temporal order cannot be determined from the context.
+        includes - one event or time span fully contains another within its duration.
+        is_included - an event or time is completely contained within the duration of another.
+        overlap - two events or times partially coincide, sharing some duration but not fully containing each other.
+        """
+
+        self.context = """
+        ---
+        Text for Analysis:
+        {text}
+        """
+
+        self.instruction = """Respond only with the unique_id list to drop (wrong label)"""
+
+    @staticmethod
+    def _generate_dot_graph(relation):
+        for rel in relation:
+            if not rel['eiid1'].startswith('EVENT'):
+                rel['eiid1'] = rel['eiid1'].replace('e', 'EVENT')
+                rel['eiid2'] = rel['eiid2'].replace('e', 'EVENT')
+
+        line_format = '"{eiid1}" -> "{eiid2}" [label="{relation}", score={score}, unique_id={idx}];'
+        return 'digraph Chronology {' + '\n\t'.join(line_format.format(eiid1=rel['eiid1'], 
+                                                                       eiid2=rel['eiid2'], 
+                                                                       relation=rel['relation'], 
+                                                                       score=rel['probs'],
+                                                                       idx=idx) 
+                                                    for idx, rel in enumerate(relation)) + '\n}'
+
+
+    def generate_prompt(self, text: str, relations: List[str] = None):
+        assert text is not None, "text not provided"
+
+        full_prompt = self.system
+
+        context = self.context.format(text=text) + '\n The inconsistent graph:\n' + self._generate_dot_graph(relations) + '\n---'
+        instruction = self.instruction.format(relations=relations)
+        return f"""{full_prompt} \n{context} \n{instruction}"""
+    
+    def generate_dict_prompt(self, text: str, relations: Optional[str] = None):
+        assert text is not None, "text not provided"
+
+        system_content = self.system
+        context = self.context.format(text=text)  + '\n' + self._generate_dot_graph(relations) + '\n---'
+
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": f"{context}\n{self.instruction}"},
         ]
     
