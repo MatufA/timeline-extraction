@@ -1,13 +1,16 @@
 import re
 import json
 import logging
-from typing import Union, Literal
+from typing import List, Optional, Union, Literal
 from itertools import combinations
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from bs4 import BeautifulSoup
+import networkx as nx
+
+from full_temporal_relation.graph import Graph
 
 def replace_eid(text, exclude_ids):
     pattern = r'ei(\d+):(\w+)'
@@ -44,11 +47,19 @@ def load_data(path: Union[str, Path]) -> pd.DataFrame:
     return df
 
 def generate_all_comb_training_dataset(docs_dir: Union[str, Path], output_path: Path, window: int = 2, 
-                                       is_full_text: bool = False) -> pd.DataFrame:
+                                       is_full_text: bool = False, prev_relations_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     docs = [Doc(path) for path in Path(docs_dir).glob('*.tml')]
     ei_regex = r'(ei\d+):\w+\s*'
     
-    doc_relations = []
+    if prev_relations_df is None:
+        doc_relations = []
+    else:
+        doc_relations = [{
+                'text': replace_eid(row.text, exclude_ids=[row.eiid1, row.eiid2]),
+                'relations': [(row.eiid1, row.eiid2)],
+                'doc_id': row.docid
+            } for _, row in prev_relations_df.iterrows()]
+    
     for doc in docs:
         full_text = doc.get_text()
         lines = full_text.split('\n\n')
@@ -60,7 +71,7 @@ def generate_all_comb_training_dataset(docs_dir: Union[str, Path], output_path: 
                 indexes = np.repeat(idx, len(ids_groups))
                 event_dict.update(dict(zip(ids_groups, indexes)))
 
-        relation_history = set()
+        unique_ids = set(prev_relations_df[prev_relations_df.docid == doc.docid].unique_id.values) if prev_relations_df is not None else set()
         lines_size = len(lines)
         for idx, line in enumerate(lines):
             max_idx = min(lines_size, idx+window) +1
@@ -70,7 +81,8 @@ def generate_all_comb_training_dataset(docs_dir: Union[str, Path], output_path: 
             if ids_groups:
                 rel_combs = combinations(ids_groups, 2)
                 for comb in rel_combs:
-                    if tuple(comb) not in relation_history:
+                    comb_key = '-'.join(sorted(comb))
+                    if comb_key not in unique_ids:
                         min_idx = min(event_dict[comb[0]], event_dict[comb[1]])
                         max_idx = max(event_dict[comb[0]], event_dict[comb[1]])
 
@@ -79,7 +91,7 @@ def generate_all_comb_training_dataset(docs_dir: Union[str, Path], output_path: 
                         else:
                             train_text = '\n'.join(lines[min_idx: max_idx+1])
 
-                        relation_history.add(tuple(comb))  
+                        unique_ids.add(comb_key)
                         doc_relations.append({
                             'doc_id': doc.docid,
                             'text': replace_eid(train_text, exclude_ids=comb), 
@@ -193,16 +205,38 @@ class Doc:
         relations = ((d.get('eventinstanceid'), d.get('relatedtoeventinstance'), d.get('reltype')) for d in
                      self.doc.find_all('tlink') if d.get('reltype') in set(['IBEFORE', 'BEFORE', 'AFTER', 'IAFTER']))
         return list(filter(lambda d: d[0] is not None and d[1] is not None, relations))
+    
+def generate_transitive_reduction_dataset(df: pd.DataFrame, output_path: Path, use_equal: bool = True) -> pd.DataFrame:
+    supported_relation=['AFTER', 'BEFORE']
+    if use_equal:
+        supported_relation.append('EQUAL')
 
+    tr_list = []
+    for docid, group in df.groupby('docid'):
+        graph = Graph(use_equal=use_equal, supported_relation=supported_relation, relation_key='label')
+        doc_graph = graph.generate_directed_graph(group)
+        tr = nx.transitive_reduction(doc_graph)
+        tr_list.extend([e1.split('-') + [e2.split('-')[1]] for e1, e2 in tr.edges])
+
+    tr_df = pd.DataFrame(tr_list, columns=['docid', 'eiid1', 'eiid2'])
+    eiid1_eiid2 = list(zip(tr_df['eiid1'], tr_df['eiid2']))
+    tr_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
+
+    new_df = pd.merge(df, tr_df, on=['docid', 'unique_id'], how='inner')
+    new_df.to_csv(output_path, index=False)
+    return new_df
 
 if __name__ == '__main__':
     DATA_PATH = Path('./data')
     MATRES_PATH = DATA_PATH / 'MATRES'
     DOCS_DIRS_PATH = MATRES_PATH / 'raw' / 'TBAQ-cleaned'
 
-    BASE_NAMES = ['AQUAINT', 'TimeBank', 'te3-platinum'] #  
-    BASE_DF_PATHS = ['aquaint.txt', 'timebank.txt', 'platinum.txt'] # 
-    modes = ['pair'] # 'pair', 'multi', 
+    df = load_data(MATRES_PATH / 'platinum.txt')
+    # generate_transitive_reduction_dataset(df, output_path=MATRES_PATH / 'platinum_dags.txt', use_equal=False)
+
+    BASE_NAMES = ['te3-platinum'] #  'AQUAINT', 'TimeBank', 
+    BASE_DF_PATHS = ['platinum.txt'] # 'aquaint.txt', 'timebank.txt', 
+    modes = ['comb'] # 'pair', 'multi', 
     is_full_text = False
 
     for mode in modes: 
@@ -212,7 +246,7 @@ if __name__ == '__main__':
         elif mode == 'multi':
             output = DATA_PATH / 'wo-vague' / 'te-prepared-data'
         elif mode == 'comb':
-            output = DATA_PATH / 'wo-vague' / 'trc-prepared-data'
+            output = DATA_PATH / 'wo-vague' / 'trc-all-prepared-data'
 
         for name, df_name in zip(BASE_NAMES, BASE_DF_PATHS):
             output_file = output / f'{mode}-{name}.csv'
@@ -220,25 +254,27 @@ if __name__ == '__main__':
             context_ref = 'full_context' if is_full_text else 'minimal_context'
             jsonl_out_name = f'{mode}_{name.lower()}_{context_ref}_text_w_relations_prepared.json'
             jsonl_out_path = DATA_PATH/'TRC'/'raw_text'/jsonl_out_name
+            overwrite = True
 
+            if not output_file.exists() or overwrite:
+                gold_df = load_data(MATRES_PATH / df_name)
+                # gold_df = gold_df[gold_df.label != 'VAGUE']
+            
+                df = generate_training_dataset(gold_df, docs_dir=DOCS_DIRS_PATH / name, mode='pair')
+                output.mkdir(exist_ok=True, parents=True)
+                df.to_csv(output_file, index=False)
+            else:
+                df = pd.read_csv(output_file, header=0)
+                print(f"Data already exists for {name}. Skipping.")
+
+            prepare_as_jsonl(df,
+                            output_path=jsonl_out_path,
+                            mode=mode)
+            
             if mode == 'comb':
 
-                df = generate_all_comb_training_dataset(docs_dir=DOCS_DIRS_PATH / name, 
+                df_comb = generate_all_comb_training_dataset(docs_dir=DOCS_DIRS_PATH / name, 
                                                     output_path=jsonl_out_path,
                                                     window=2, 
-                                                    is_full_text=is_full_text)
-            else:
-                if not output_file.exists():
-                    gold_df = load_data(MATRES_PATH / df_name)
-                    gold_df = gold_df[gold_df.label != 'VAGUE']
-                    
-                    df = generate_training_dataset(gold_df, docs_dir=DOCS_DIRS_PATH / name, mode=mode)
-                    output.mkdir(exist_ok=True, parents=True)
-                    df.to_csv(output_file, index=False)
-                else:
-                    df = pd.read_csv(output_file, header=0)
-                    print(f"Data already exists for {name}. Skipping.")
-
-                prepare_as_jsonl(df,
-                                output_path=jsonl_out_path,
-                                mode=mode)
+                                                    is_full_text=is_full_text, 
+                                                    prev_relations_df=df)
