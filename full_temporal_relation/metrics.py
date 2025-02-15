@@ -243,6 +243,14 @@ def get_n_graph_cycles(df: pd.DataFrame, relation_key: str) -> dict:
 
 
 if __name__ == '__main__':
+
+    TRC_GLOBAL_VARIABLES = {
+    "LABELS": ["BEFORE", "AFTER", "EQUAL", "VAGUE"],
+    "LABELS_NO_VAGUE": ["BEFORE", "AFTER", "EQUAL"],
+    "LABELS_IDS": [0, 1, 2, 3]
+    }
+    id2label = dict(zip(TRC_GLOBAL_VARIABLES['LABELS_IDS'], TRC_GLOBAL_VARIABLES['LABELS']))
+
     # model_name = 'llama-3.1-70b-versatile'
     # model_name = 'gemini-1.5-pro'
     # model_name = 'gemini-1.5-flash'
@@ -253,7 +261,7 @@ if __name__ == '__main__':
     suffixes = [model_name.split('/')[1] if '/' in model_name else model_name, method]
     suffix_name = '-'.join(suffixes)
 
-    MATRES_DATA_PATH = Path('../data')
+    MATRES_DATA_PATH = Path('./data')
     TRC_RAW_PATH = MATRES_DATA_PATH / 'TRC'
     # parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / method / f'platinum-test-results-{model_name}.csv'
     parsed_response_path = TRC_RAW_PATH / 'parsed_responses' / method / f'{mode}-{data_name}-results-{suffix_name}.csv'
@@ -261,16 +269,21 @@ if __name__ == '__main__':
     results_path = TRC_RAW_PATH / 'results' / method / f'platinum-results-{model_name}.csv'
     min_vote = 3
 
-    predicted_df = pd.read_csv(parsed_response_path)
+    predicted_df = pd.read_csv('/home/adiel/full-temporal-relation/data/comb_te3-platinum_minimal_context_predictions_with_probs_baseline_no_cycles_by_probs.csv')
     platinum_df = load_data(gold_data_path)
+    predicted_df = predicted_df.rename(columns={'relation': 'p_label'})
+    predicted_df.eiid1 = predicted_df.eiid1.str.replace('e', 'ei')
+    predicted_df.eiid2 = predicted_df.eiid2.str.replace('e', 'ei')
+    if 'unique_id'not in predicted_df.columns:
+        eiid1_eiid2 = list(zip(predicted_df['eiid1'], predicted_df['eiid2']))
+        predicted_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
+        predicted_df['p_label'] = predicted_df.predictions.replace(id2label)
+        # predicted_df = predicted_df.rename(columns={'doc_id': 'docid'})
+        predicted_df = predicted_df.drop_duplicates()
+    else:
+        predicted_df.unique_id = predicted_df.unique_id.str.replace('e', 'ei')
 
-    # platinum_df = pd.read_csv(gold_data_path, sep='\t', header=None,
-    #                           names=['docid', 'verb1', 'verb2', 'eiid1', 'eiid2', 'relation'])
-    # platinum_df.eiid1 = 'ei' + platinum_df.eiid1.astype(str)
-    # platinum_df.eiid2 = 'ei' + platinum_df.eiid2.astype(str)
-    #
-    # eiid1_eiid2 = list(zip(platinum_df['eiid1'], platinum_df['eiid2']))
-    # platinum_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
+    results_df = summary_results(model_results_df=predicted_df, gold_df=platinum_df, model_name=model_name)
 
     predicted_df['score'] = 1
     predicted_sum_df = predicted_df.groupby(['docid', 'unique_id', 'relation'])['score'].sum().reset_index()
