@@ -204,11 +204,12 @@ if __name__ == '__main__':
     # model_names = ['mistralai/Mistral-7B-Instruct-v0.3']
 
     model_names = ['gpt-4o-mini'] 
+    # model_names = ['deepseek-ai/DeepSeek-R1']
 
     use_vague = True
 
-    parser_type = LabelParser
-    # parser_type = JsonParser
+    # parser_type = LabelParser
+    parser_type = JsonParser
     overwrite=True
 
     for model_name in model_names:
@@ -222,7 +223,7 @@ if __name__ == '__main__':
             
 
             # model = HuggingfaceClient(model_name=model_name, device=gpu_device, parser=parser_type)
-            model = OpenAIClient(model_name=model_name, use_formate=False, parser=parser_type)
+            model = OpenAIClient(model_name=model_name, use_formate=False, parser=parser_type, use_dot_graph=(mode=='multi'))
 
             """
             train - timebank.txt
