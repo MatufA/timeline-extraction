@@ -320,3 +320,60 @@ class NTBreakCycleEvents(Prompt):
             {"role": "user", "content": f"{context}\n{self.instruction}"},
         ]
     
+class BreakCycleEventsByRelabeling(Prompt):
+    def __init__(self):
+        self.system = f"""
+        Task Overview:
+        You are given a text, in which some events are uniquely marked by [EVENT#ID]event[/EVENT#ID] (e.g., [EVENT1]event1[/EVENT1], [EVENT2]event2[/EVENT2]),
+        and a dot graph which represent chronological order with error, where some edges form cycles.
+        Your task is to decide which pair to relabel with new relation, being concise and change the minimum number of edges and return only the modification edges.
+        Pay attention, I used classifier to choose the most fitted relation (label attribute in dot graph) 
+        and score which represent the confidence of the classifier.
+
+        relation meaning:
+        before - the first verb happened before the second.
+        after - the first verb happened after the second.
+        equal - both events happen simultaneously
+        vague - temporal order cannot be determined from the context
+        """
+        self.context = """
+        ---
+        Text for Analysis:
+        {text}
+        """
+
+        self.instruction = """Respond only with valid dot graph format with the approprite markers and attributes (like label) for the modified edges. Do not write an introduction or summary.
+        the graph:"""
+
+    @staticmethod
+    def _generate_dot_graph(relation):
+        line_format = '"{eiid1}" -> "{eiid2}" [label="{relation}", score={score}, unique_id={idx}];'
+        return 'digraph Chronology {' + '\n\t'.join(line_format.format(eiid1=rel['eiid1'], 
+                                                                       eiid2=rel['eiid2'], 
+                                                                       relation=rel['relation'], 
+                                                                       score=rel['probs'],
+                                                                       idx=idx) 
+                                                    for idx, rel in enumerate(relation)) + '\n}'
+
+
+    def generate_prompt(self, text: str, relations: List[str] = None):
+        assert text is not None, "text not provided"
+
+        full_prompt = self.system
+    
+        context = self.context.format(text=text) + '\n The inconsistent graph:\n' + self._generate_dot_graph(relations) + '\n---'
+        instruction = self.instruction.format(relations=relations)
+        return f"""{full_prompt} \n{context} \n{instruction}"""
+    
+    def generate_dict_prompt(self, text: str, relations: Optional[str] = None):
+        assert text is not None, "text not provided"
+
+        system_content = self.system
+       
+        context = self.context.format(text=text)  + '\n' + self._generate_dot_graph(relations) + '\n---'
+
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": f"{context}\n{self.instruction}"},
+        ]
+    
