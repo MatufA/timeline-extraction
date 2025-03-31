@@ -7,8 +7,8 @@ from tqdm.auto import tqdm
 
 from full_temporal_relation.data.preprocessing import Doc, load_data, replace_eid
 from full_temporal_relation.models.OpenAIClient import OpenAIClient, TemporalRelationsToDrop
-from full_temporal_relation.models.LLModel import NoParser
-from full_temporal_relation.prompts.Prompt import BreakCycleEvents, NTBreakCycleEvents
+from full_temporal_relation.models.LLModel import JsonParser, NoParser
+from full_temporal_relation.prompts.Prompt import BreakCycleEvents, BreakCycleEventsByRelabeling, NTBreakCycleEvents
 from full_temporal_relation.pipeline import get_summary_results
 from full_temporal_relation.metrics import summary_results
 from full_temporal_relation.graph import Graph
@@ -73,6 +73,57 @@ def prepare_annotation_recoreds(df, docs):
         })
     return records
 
+def evaluate_by_relabel(model_name, prompt_template, data_path, cycley_data, result_path_name):
+    results_path = data_path / result_path_name.format(model_name=model_name)
+    model = OpenAIClient(model_name=model_name, use_formate=False, parser=JsonParser, use_dot_graph=True)
+    min_votes = 3
+
+    with results_path.open('w') as file:
+            for record in tqdm(cycley_data, desc='Text evaluation', position=0, leave=True):
+                prompt = prompt_template.generate_dict_prompt(**{p: record[p] for p in ['text', 'relations']})
+                response = model.generate_response(prompt)
+
+                model_response = []
+                for res in model.prepare_response(response):
+                    res['docid'] = record['docid']
+                    if not res['response']:
+                        print(f'unable to process res: {response}')
+                        continue
+
+                    for r in res['response']:
+                        eiid1 = r['event1'].replace('EVENT', 'ei')
+                        eiid2 = r['event2'].replace('EVENT', 'ei')
+                        unique_id = '-'.join(sorted([eiid1, eiid2]))
+                        model_response.append({'eiid1': eiid1, 
+                                               'eiid2': eiid2, 
+                                               'unique_id': unique_id, 
+                                               'docid': record['docid'], 
+                                               'p_label': r['relation'], 
+                                               'relation': r['relation']})
+
+                df_response = pd.DataFrame(model_response)
+
+                # Group by docid, unique_id, and label, count votes
+                vote_counts = df_response.groupby(['docid', 'unique_id', 'p_label']).size().reset_index(name='vote_count')
+                
+                # Find rows with at least min_votes
+                qualified_votes = vote_counts[vote_counts['vote_count'] >= min_votes]
+                
+                # For each (docid, unique_id), select the label with max votes
+                majority_labels = qualified_votes.loc[qualified_votes.groupby(['docid', 'unique_id'])['vote_count'].idxmax()]
+                
+                # Merge back with original dataframe to get full row details
+                filtered_df = pd.merge(df_response.drop_duplicates(subset=['docid', 'unique_id', 'p_label']), 
+                                    majority_labels[['docid', 'unique_id', 'p_label']], 
+                                    on=['docid', 'unique_id', 'p_label'], 
+                                    how='inner')
+                
+                for rec in filtered_df.to_dict(orient='records'):
+                    json_line = json.dumps(rec)
+                    file.write(json_line + '\n')
+
+                
+
 def evaluate(model_name, prompt_template, data_path, cycley_data, result_path_name):
     results_path = data_path / result_path_name.format(model_name=model_name)
     model = OpenAIClient(model_name=model_name, use_formate=False, parser=NoParser, use_dot_graph=False, response_format=TemporalRelationsToDrop)
@@ -121,24 +172,31 @@ if __name__ == '__main__':
     }
     id2label = dict(zip(TRC_GLOBAL_VARIABLES['LABELS_IDS'], TRC_GLOBAL_VARIABLES['LABELS']))
 
-    # platinum_df = load_data(gold_data_path)
-    nt_a1_test_gold = pd.read_csv(DATA_PATH / 'narrativetime_a1_test_gold.csv')
+    platinum_df = load_data(gold_data_path)
+    # nt_a1_test_gold = pd.read_csv(DATA_PATH / 'narrativetime_a1_test_gold.csv')
 
-    initial_preds_df = pd.read_csv(DATA_PATH / 'narrativetime_a1_test_predict_with_probs.csv')
-    # initial_preds_df = initial_preds_df.rename(columns={'doc_id': 'docid'})
-    # initial_preds_df['relation'] = initial_preds_df.predictions.replace(id2label)
-    # eiid1_eiid2 = list(zip(initial_preds_df['eiid1'], initial_preds_df['eiid2']))
-    # initial_preds_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
+    initial_preds_df = pd.read_csv(DATA_PATH / 'grouped_cycles_matres_by_baseline.csv')
+    # predicted_df = pd.read_csv(DATA_PATH / 'comb_te3-platinum_minimal_context_predictions_with_probs_baseline.csv')
+    # eiid1_eiid2 = list(zip(predicted_df['eiid1'], predicted_df['eiid2']))
+    # predicted_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
+
+    # initial_preds_df = pd.merge(initial_preds_df, predicted_df[['docid', 'unique_id', 'predictions', 'probs']], on=['docid', 'unique_id'], how='left')
+
+    initial_preds_df = initial_preds_df.rename(columns={'doc_id': 'docid'})
+    initial_preds_df['relation'] = initial_preds_df.predictions.replace(id2label)
+    eiid1_eiid2 = list(zip(initial_preds_df['eiid1'], initial_preds_df['eiid2']))
+    initial_preds_df['unique_id'] = ['-'.join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2]
 
     # cycles_df = pd.read_csv(DATA_PATH / 'comb_te3-platinum_minimal_context_predictions_cycles_only.csv')
-    # docs = {path.name[:-4]:Doc(path) for path in Path(DOCS_DIRS_PATH / 'te3-platinum').glob('*.tml')}
-    docs = json.load((DATA_PATH / 'narrativetime_a1_test_to_text_mappings.json').open('r'))
+    docs = {path.name[:-4]:Doc(path) for path in Path(DOCS_DIRS_PATH / 'te3-platinum').glob('*.tml')}
+    # docs = json.load((DATA_PATH / 'narrativetime_a1_test_to_text_mappings.json').open('r'))
 
     # prepare_annotation(cycles_df, preparation_cycles, docs)
 
     model_names = ['gpt-4o-mini', 'gpt-4o'] 
-    prompt_template = NTBreakCycleEvents()
+    # prompt_template = NTBreakCycleEvents()
     # prompt_template = BreakCycleEvents()
+    prompt_template = BreakCycleEventsByRelabeling()
     results = []
     graph = Graph(use_equal=False, supported_relation=['AFTER', 'BEFORE'])
     edges_to_drop = []
@@ -149,29 +207,35 @@ if __name__ == '__main__':
             cycles = {k: v for k, v in graph.find_cycles(predicted_df).items()}
             n_cycles = sum(len(v) for v in cycles.values())
             print(f'#cycles={n_cycles}')
-            # for cycle_id, cycles_only_df in predicted_df.groupby('cycle_id'):
-            cycles_only_df = prepare_cycles_only_df(cycles, predicted_df)
-            # recoreds = prepare_annotation_recoreds(cycles_only_df, docs)
-            recoreds = prepare_narrativetime_annotation_recoreds(cycles_only_df, docs)
+            for cycle_id, cycles_only_df in predicted_df.groupby('cycle_id'):
+                # cycles_only_df = prepare_cycles_only_df(cycles, predicted_df)
+                recoreds = prepare_annotation_recoreds(cycles_only_df, docs)
+                # recoreds = prepare_narrativetime_annotation_recoreds(cycles_only_df, docs)
 
-            evaluate(model_name, prompt_template, 
-                    data_path=DATA_PATH, 
-                    cycley_data=recoreds, 
-                    result_path_name=result_path_name)
-            predicted_edges_to_drop_df = pd.read_json(DATA_PATH / result_path_name.format(model_name=model_name), lines=True)
-            edges_to_drop.append(predicted_edges_to_drop_df)
-            
-            df_filtered = pd.merge(predicted_df, predicted_edges_to_drop_df[['docid', 'unique_id']], on=['docid', 'unique_id'], how='left', indicator=True)
-            df_no_cycles = df_filtered[df_filtered['_merge'] != 'both'].drop('_merge', axis=1)
+                # evaluate(model_name, prompt_template, 
+                #         data_path=DATA_PATH, 
+                #         cycley_data=recoreds, 
+                #         result_path_name=result_path_name)
 
-            predicted_df = df_no_cycles
-            predicted_df['p_label'] = predicted_df['relation'] 
+                evaluate_by_relabel(model_name, prompt_template, 
+                        data_path=DATA_PATH, 
+                        cycley_data=recoreds, 
+                        result_path_name=result_path_name)
+                
+                predicted_edges_to_drop_df = pd.read_json(DATA_PATH / result_path_name.format(model_name=model_name), lines=True)
+                edges_to_drop.append(predicted_edges_to_drop_df)
+                
+                df_filtered = pd.merge(predicted_df, predicted_edges_to_drop_df[['docid', 'unique_id']], on=['docid', 'unique_id'], how='left', indicator=True)
+                df_no_cycles = df_filtered[df_filtered['_merge'] != 'both'].drop('_merge', axis=1)
+
+                predicted_df = df_no_cycles
+                predicted_df['p_label'] = predicted_df['relation'] 
 
         # predicted_df.eiid1 = predicted_df.eiid1.str.replace('e', 'ei')
         # predicted_df.eiid2 = predicted_df.eiid2.str.replace('e', 'ei')
         # predicted_df.unique_id = predicted_df.unique_id.str.replace('e', 'ei')
         predicted_df.to_csv(DATA_PATH / f'{model_name}_narrativetime_predictions_no_cycles_by_llm.csv', index=False)
-        results_df = summary_results(model_results_df=predicted_df, gold_df=nt_a1_test_gold, model_name=model_name)
+        results_df = summary_results(model_results_df=predicted_df, gold_df=platinum_df, model_name=model_name)
         results_df.to_csv(DATA_PATH / f'results_narrativetime_a1_test_no_cycles_by_{model_name}.csv', index=False)
         results.append(results_df)
         
