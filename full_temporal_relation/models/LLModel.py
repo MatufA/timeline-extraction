@@ -14,7 +14,7 @@ from full_temporal_relation.data.preprocessing import replace_eid
 
 def parse_dot_graph(dot_graph):
     # Extract edges from the DOT graph
-    edge_pattern = r'"?(EVENT\d+)"?\s*->\s*"?(EVENT\d+)"?\s*\[label="?(.*?)"?\]'
+    edge_pattern = r'"?(EVENT\d+)"?\s*->\s*"?(EVENT\d+)"?\s*\[label="?([\w]*)"?\]?'
     matches = re.findall(edge_pattern, dot_graph)
 
     # Create a list of dictionaries from the matches
@@ -24,7 +24,7 @@ def parse_dot_graph(dot_graph):
     ]
 
     if not relations:
-        edge_pattern = r'"?(e\d+)"?\s*->\s*"?(e\d+)"?\s*\[label="?(.*?)"?\]'
+        edge_pattern = r'"?(e\d+)"?\s*->\s*"?(e\d+)"?\s*\[label=("?[\w]*)"?\]?'
         matches = re.findall(edge_pattern, dot_graph)
 
         relations = [
