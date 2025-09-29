@@ -190,15 +190,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 📖 Citation
 
 If you use this system in your research, please cite:
-
-```bibtex
-@article{timeline_extraction_2024,
-  title={Timeline Extraction: Temporal Relation Classification using Large Language Models},
-  author={Adiel Meir, Kfir Bar},
-  journal={INLG},
-  year={2025}
-}
-```
+TBD
 
 ## 🆘 Support
 
