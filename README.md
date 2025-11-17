@@ -190,7 +190,25 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 📖 Citation
 
 If you use this system in your research, please cite:
-TBD
+```
+@inproceedings{meir-bar-2025-llms,
+    title = "Can {LLM}s Help Encoder Models Maintain Both High Accuracy and Consistency in Temporal Relation Classification?",
+    author = "Meir, Adiel  and
+      Bar, Kfir",
+    editor = "Flek, Lucie  and
+      Narayan, Shashi  and
+      Phương, L{\^e} Hồng  and
+      Pei, Jiahuan",
+    booktitle = "Proceedings of the 18th International Natural Language Generation Conference",
+    month = oct,
+    year = "2025",
+    address = "Hanoi, Vietnam",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2025.inlg-main.41/",
+    pages = "716--733",
+    abstract = "Temporal relation classification (TRC) demands both accuracy and temporal consistency in event timeline extraction. Encoder-based models achieve high accuracy but introduce inconsistencies because they rely on pairwise classification, while LLMs leverage global context to generate temporal graphs, improving consistency at the cost of accuracy. We assess LLM prompting strategies for TRC and their effectiveness in assisting encoder models with cycle resolution. Results show that while LLMs improve consistency, they struggle with accuracy and do not outperform a simple confidence-based cycle resolution approach. Our code is publicly available at: \url{https://github.com/MatufA/timeline-extraction}."
+}
+```
 
 ## 🆘 Support
 
