@@ -12,6 +12,7 @@ from timeline_extraction.pipeline import (
     ModelFactory,
     PipelineExperimentConfig, TimelineExtractionPipeline,
 )
+from timeline_extraction.tracking import TrackingConfig
 
 
 @pytest.fixture
@@ -124,3 +125,206 @@ def test_dataset_name_isolates_identical_source_files(configured_pipeline):
     assert pipeline._get_file_paths(config, model_config)["results"] != pipeline._get_file_paths(
         replace(config, data_name="custom2"), model_config
     )["results"]
+
+
+@pytest.fixture
+def langsmith_receiver():
+    """Capture real SDK exports without contacting a hosted tracing service."""
+    pytest.importorskip("langsmith")
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    batches = []
+
+    class Receiver(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def respond(self, value):
+            body = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self.respond({"batch_ingest_config": {
+                "use_multipart_endpoint": False, "size_limit": 100,
+                "scale_up_nthreads_limit": 1, "scale_up_qsize_trigger": 1000,
+                "scale_down_nempty_trigger": 4,
+            }})
+
+        def do_POST(self):
+            batches.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            self.respond({})
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Receiver)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield TrackingConfig(
+            backend="langsmith", langsmith_api_key="local-tracking-secret",
+            langsmith_endpoint=f"http://127.0.0.1:{server.server_port}",
+        ), batches
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.mark.parametrize("mode, tracked, disconnected", [
+    ("multi", False, False),
+    ("pair", False, False),
+    ("comb", False, False),
+    ("multi", True, False),
+    ("multi", False, True),
+])
+def test_cached_chain_scores_voted_explicit_and_expanded_artifacts(
+    monkeypatch, configured_pipeline, request, mode, tracked, disconnected,
+):
+    pipeline, original_config, model_config = configured_pipeline
+    pipeline.tracking_config = TrackingConfig(backend="none")
+    if tracked:
+        pipeline.tracking_config, batches = request.getfixturevalue("langsmith_receiver")
+    config = replace(
+        original_config, mode=mode, parser_type="json" if mode == "multi" else "label",
+        skip_model_eval=True,
+    )
+    gold = (
+        "doc\trun\tstop\t1\t2\tBEFORE\n"
+        "doc\tstop\tleave\t2\t3\tBEFORE\n"
+        "doc\trun\tleave\t1\t3\tBEFORE\n"
+    )
+    if disconnected:
+        gold += "doc\trun\twait\t1\t4\tVAGUE\n"
+    pipeline._get_labeled_data_path(config).write_text(gold)
+    paths = pipeline._get_file_paths(config, model_config)
+    assert paths["results"] == pipeline._get_file_paths(
+        replace(config, skip_model_eval=False), model_config
+    )["results"]
+    paths["llm_response"].parent.mkdir(parents=True)
+    # Each chain edge gets two votes, but the entire chain occurs in only one trial.
+    # Expanding per trial before voting would therefore miss the transitive edge.
+    trials = [
+        [["ei1", "ei2"]],
+        [["ei2", "ei3"]],
+        [["ei1", "ei2"], ["ei2", "ei3"]],
+    ]
+    rows = [
+        {"doc_id": "doc", "relations": relations, "response": "BEFORE",
+         "true_label": "VAGUE", "content": "stored graph", "trail": trial,
+         "prompt": "stored compact prompt"}
+        for trial, relations in enumerate(trials)
+    ]
+    saved_responses = "".join(json.dumps(row) + "\n" for row in rows)
+    paths["llm_response"].write_text(saved_responses)
+    paths["checkpoint"].write_text('{"saved": "generation checkpoint"}\n')
+    checkpoint = paths["checkpoint"].read_bytes()
+    monkeypatch.setattr(
+        ModelFactory, "create_model",
+        lambda *args, **kwargs: pytest.fail("cached scoring must not construct a model"),
+    )
+
+    result = pipeline.run_experiment(config, model_config)
+    assert result.success, result.error
+    assert paths["llm_response"].read_text() == saved_responses
+    assert paths["checkpoint"].read_bytes() == checkpoint
+    parsed = pd.read_csv(paths["parsed_response"])
+    assert len(parsed) == 4
+    assert set(parsed.unique_id) == {"ei1-ei2", "ei2-ei3"}
+    assert set(parsed.relation) == {"VAGUE"}  # Annotation never drives completion.
+    voted = pd.read_csv(result.results_path)
+    assert len(voted) == 2
+    assert set(voted.unique_id) == {"ei1-ei2", "ei2-ei3"}
+    assert voted.p_label.tolist() == ["BEFORE", "BEFORE"]
+    assert "is_inferred" not in parsed and "is_inferred" not in voted
+    metrics = pd.read_csv(result.metrics_path, header=[0, 1])
+    assert metrics.columns.nlevels == 2
+    names = set(metrics.columns.get_level_values(0))
+    assert "accuracy" not in names and "BEFORE" not in names
+    assert {"method", "suffix_path", "model_name"} <= names
+    assert metrics["explicit.accuracy"].iloc[0, 0] == pytest.approx(2 / (3 + disconnected))
+    assert metrics["explicit.coverage"].iloc[0, 0] == pytest.approx(2 / (3 + disconnected))
+    assert metrics[("explicit.BEFORE", "precision")].iloc[0] == 1
+    metadata = json.loads(result.metadata_path.read_text())
+    if mode == "multi":
+        assert result.expanded_results_path == paths["expanded_results"]
+        expanded = pd.read_csv(result.expanded_results_path)
+        assert expanded.columns.tolist() == [
+            "docid", "eiid1", "eiid2", "p_label", "unique_id", "is_inferred",
+        ]
+        assert len(expanded) == 3
+        assert expanded.set_index("unique_id").is_inferred.to_dict() == {
+            "ei1-ei2": False, "ei2-ei3": False, "ei1-ei3": True,
+        }
+        assert set(expanded.p_label) == {"BEFORE"}
+        assert metrics["expanded.accuracy"].iloc[0, 0] == pytest.approx(3 / (3 + disconnected))
+        assert metrics["expanded.coverage"].iloc[0, 0] == pytest.approx(3 / (3 + disconnected))
+        assert metadata["file_paths"]["expanded_results_path"] == str(result.expanded_results_path)
+    else:
+        assert result.expanded_results_path is None
+        assert not paths["expanded_results"].exists()
+        assert not any(name.startswith("expanded.") for name in names)
+        assert metadata["file_paths"]["expanded_results_path"] is None
+
+
+    if tracked:
+        runs = {}
+        for batch in batches:
+            for run in batch.get("post", []) + batch.get("patch", []):
+                runs.setdefault(run["id"], {}).update(run)
+        root = next(run for run in runs.values() if run.get("name") == "timeline.experiment")
+        assert not any(run.get("run_type") == "llm" for run in runs.values())
+        output = root["outputs"]
+        assert output["artifacts"]["expanded_results_path"] == str(result.expanded_results_path)
+        assert output["artifacts"]["results_path"] == str(result.results_path)
+        exported = output["metrics"][0]
+        assert exported["explicit.accuracy"] == pytest.approx(2 / 3)
+        assert exported["expanded.accuracy"] == 1
+        assert exported["explicit.BEFORE.precision"] == metrics[("explicit.BEFORE", "precision")].iloc[0]
+        assert exported["expanded.BEFORE.recall"] == metrics[("expanded.BEFORE", "recall")].iloc[0]
+        assert "accuracy" not in exported
+
+
+@pytest.mark.parametrize("mode", ["pair", "multi"])
+@pytest.mark.parametrize("relations, response", [
+    ([], ""),
+    ([["ei1", "ei2"]], "NO_PREDS"),
+])
+def test_cached_empty_voted_predictions_keep_metrics_and_artifact_schema(
+    monkeypatch, configured_pipeline, mode, relations, response,
+):
+    pipeline, original_config, model_config = configured_pipeline
+    pipeline.tracking_config = TrackingConfig(backend="none")
+    config = replace(
+        original_config, mode=mode, parser_type="json" if mode == "multi" else "label",
+        skip_model_eval=True,
+    )
+    paths = pipeline._get_file_paths(config, model_config)
+    paths["llm_response"].parent.mkdir(parents=True)
+    paths["llm_response"].write_text("".join(
+        json.dumps({"doc_id": "doc", "relations": relations, "response": response,
+                    "trail": trial, "prompt": "stored prompt"}) + "\n"
+        for trial in range(3)
+    ))
+    monkeypatch.setattr(
+        ModelFactory, "create_model",
+        lambda *args, **kwargs: pytest.fail("cached scoring must not construct a model"),
+    )
+    result = pipeline.run_experiment(config, model_config)
+    assert result.success, result.error
+    assert pd.read_csv(result.results_path).empty
+    metrics = pd.read_csv(result.metrics_path, header=[0, 1])
+    for view in (["explicit", "expanded"] if mode == "multi" else ["explicit"]):
+        assert metrics[f"{view}.accuracy"].iloc[0, 0] == 0
+        assert metrics[f"{view}.coverage"].iloc[0, 0] == 0
+    if mode == "multi":
+        expanded = pd.read_csv(result.expanded_results_path)
+        assert expanded.empty
+        assert expanded.columns.tolist() == [
+            "docid", "eiid1", "eiid2", "p_label", "unique_id", "is_inferred",
+        ]
+    else:
+        assert result.expanded_results_path is None
+        assert not paths["expanded_results"].exists()

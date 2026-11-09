@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -13,7 +12,6 @@ from timeline_extraction.utils import (
     normalize_relation,
     validate_temporal_relation,
 )
-import networkx as nx
 
 
 def calculate_temporal_metrics(
@@ -44,52 +42,6 @@ def calculate_temporal_metrics(
         return {"error": "No valid gold relations found"}
     true_labels, predicted_labels = map(list, zip(*pairs))
     return calculate_metrics(true_labels, predicted_labels)
-
-
-def compare_implicit_relations(model_results_df: pd.DataFrame, gold_df: pd.DataFrame):
-    relations_results = []
-
-    for docid, group in model_results_df.groupby("docid"):
-        graph = Graph(
-            use_equal=True,
-            supported_relation=["AFTER", "BEFORE", "EQUAL"],
-            relation_key="p_label",
-        )
-        doc_graph = graph.generate_directed_graph(group)
-
-        for idx, row in gold_df[gold_df.docid == docid].iterrows():
-
-            e1 = min(row.eiid1, row.eiid2)
-            e2 = max(row.eiid1, row.eiid2)
-
-            e1_name = f"{row.docid}-{graph.equal_mapping.get(e1, e1)}"
-            e2_name = f"{row.docid}-{graph.equal_mapping.get(e2, e2)}"
-
-            try:
-                if e1 in graph.equal_mapping and e2 in graph.equal_mapping:
-                    relation = "EQUAL"
-                elif nx.has_path(doc_graph, source=e1_name, target=e2_name):
-                    relation = "BEFORE"
-                elif nx.has_path(doc_graph, source=e2_name, target=e1_name):
-                    relation = "AFTER"
-                else:
-                    relation = "VAGUE"
-            except nx.exception.NodeNotFound as e:
-                logging.warning(f"{e}, Mark as VAGUE")
-                relation = "VAGUE"
-
-            relations_results.append(
-                {
-                    "eiid1": e1,
-                    "eiid2": e2,
-                    "docid": docid,
-                    "p_label_for_eval": relation,
-                    "label": row.label,
-                    "unique_id": row.unique_id,
-                }
-            )
-
-    return pd.DataFrame(relations_results)
 
 
 def summary_results(

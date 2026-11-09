@@ -1,6 +1,6 @@
 ---
 name: timeline-extraction-cli
-description: Use when preparing MATRES/TimeML corpora, running timeline-extraction classification or document-level graph experiments, selecting account-backed Antigravity/Codex/Claude or API providers, enabling LangSmith tracing, or evaluating cached responses.
+description: Use when preparing MATRES/TimeML or OmniTemp corpora, running timeline-extraction classification or document-level graph experiments, selecting account-backed Antigravity/Codex/Claude or API providers, enabling LangSmith tracing, or evaluating cached responses.
 ---
 
 # Timeline Extraction CLI
@@ -58,6 +58,21 @@ rtk uv run --locked python -m timeline_extraction.cli prepare-data \
 
 This writes pair and multi JSON inputs and records their absolute paths. Existing prepared files require explicit `--overwrite`; do not overwrite unrelated inputs. YAML paths otherwise resolve relative to the working directory.
 
+### Native OmniTemp input
+
+For [OmniTemp](https://github.com/AlonEirew/event-relation-resources/tree/main/tre_datasets/OmniTemp), use the native `test/` or `train/` JSON directory rather than MATRES/TimeML options. Its upstream `LICENSE.txt` limits use to non-commercial research and education; retain it with downloads outside this repository.
+
+```bash
+rtk uv run --locked python -m timeline_extraction.cli prepare-data \
+  --dataset-format omnitemp \
+  --input-dir ../timeline-extraction-data/data/OmniTemp/test \
+  --data-name omnitemp-test \
+  --output-dir ../timeline-extraction-data/data/TRC/raw_text \
+  --config-file run.yaml --output-config run.yaml
+```
+
+This also exports `omnitemp-test_gold.tsv`, registers it with the pair/multi inputs, and keeps BEFORE/AFTER/EQUAL/VAGUE semantics. Native mention IDs and token-index spans are preserved; both modes receive full-document text. Use a separate name/config for `train/`; never merge the splits. Do not pass `--gold-file` or `--docs-dir` with this format. Planning/evaluation uses the same commands below; do not imply that preparation runs inference or uploads data.
+
 ## Inspect, run, evaluate
 
 ```bash
@@ -93,7 +108,8 @@ For an EU workspace (`eu.smith.langchain.com`), set `LANGSMITH_ENDPOINT=https://
 ## Results, caching, and failures
 
 - Find `research_summary.csv` under the configured results directory. Per-run paths include provider/model/mode/context/dataset/method/fingerprint.
-- Read scores from `metrics.csv`, run metadata from `metrics.json`, voted predictions from `results.csv`, and generation evidence from `responses.jsonl` / `checkpoint.jsonl`. Report full-gold accuracy, coverage, F1, and temporal-cycle metrics only from actual artifacts.
+- Read scores from the two-header `metrics.csv`: first-level names use `explicit.accuracy`, `explicit.coverage`, and `explicit.<relation>`; multi mode additionally has `expanded.accuracy`, `expanded.coverage`, and `expanded.<relation>`. Per-relation precision/recall/F1 remain in the second level. Read run metadata from `metrics.json`, direct voted predictions from `results.csv`, and generation evidence from `responses.jsonl` / `checkpoint.jsonl`. Report explicit and expanded scores separately.
+- Multi mode completes the graph after voting: BEFORE/AFTER paths and transitive equality entail missing edges. Valid explicit labels are preserved. Disconnected pairs are not fabricated as VAGUE, and contradictory connected components do not support inference. `expanded_results.csv` records `is_inferred` provenance; pair/comb remain explicit-only. Cached `--skip-model-eval` rescoring computes both views without new model calls.
 - Rerunning identical settings and corpus contents reuses completed trials. Changed model/settings/input contents select a different fingerprint. Cached generations are not resent as fresh traces.
 - To score saved responses without model credentials or fresh generation:
 
@@ -108,7 +124,7 @@ Keep the original goal, methods, model, corpus, and generation settings to find 
 
 - Upload only when requested: prepared text and gold labels leave the machine.
 - The research CLI has no dataset-upload subcommand. Use the installed LangSmith SDK (`Client`) with the same `uv run --extra tracking --env-file .env` environment.
-- Build one example per prepared document. Use `inputs: {doc_id, text, relations}` from the prepared multi JSON and `outputs: {relations: [{event1, event2, relation}, ...]}` joined by document ID from the six-column MATRES gold file. The prepared `[RELATION]` placeholders are not reference labels.
+- Build one example per prepared document. Use `inputs: {doc_id, text, relations}` from the prepared multi JSON and `outputs: {relations: [{event1, event2, relation}, ...]}` joined by document ID from the six-column gold file (MATRES or the OmniTemp TSV export). Read reference labels from gold, not from the input pair list.
 - Check duplicate document IDs, missing gold documents, and the total gold relation count before uploading. Preserve the source files.
 - Check for an existing named dataset and examples before `create_dataset` / `create_examples`; do not overwrite conflicting content. Stable example IDs make an interrupted upload resumable. Verify remote inputs and reference outputs after upload, not just the count.
 - Keep an upload-ready JSON export locally if authorization blocks the request. A `403` is not a successful upload; correct `.env` permissions/region/workspace first, without sharing secrets in chat.

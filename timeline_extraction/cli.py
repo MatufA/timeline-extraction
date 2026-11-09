@@ -9,6 +9,7 @@ import click
 import yaml
 
 from timeline_extraction.config import ConfigManager, create_default_config
+from timeline_extraction.data.omnitemp import prepare_omnitemp
 from timeline_extraction.data.preprocessing import load_data, generate_training_dataset, prepare_as_jsonl
 from timeline_extraction.pipeline import (
     BatchExperimentRunner,
@@ -43,6 +44,8 @@ def _report(result):
     if not result.success:
         raise click.ClickException(result.error)
     click.echo(f"Results: {result.results_path}")
+    if result.expanded_results_path is not None:
+        click.echo(f"Expanded results: {result.expanded_results_path}")
     click.echo(f"Metrics: {result.metrics_path}")
     click.echo(f"Metadata: {result.metadata_path}")
 
@@ -113,34 +116,58 @@ def analyze_data(data_path, output):
     click.echo(content)
 
 @cli.command()
-@click.option("--gold-file", type=click.Path(exists=True, dir_okay=False), required=True)
-@click.option("--docs-dir", type=click.Path(exists=True, file_okay=False), required=True)
-@click.option("--data-name", default="te3-platinum")
+@click.option("--dataset-format", type=click.Choice(["matres", "omnitemp"]), default="matres", show_default=True, help="Source corpus format.")
+@click.option("--gold-file", type=click.Path(exists=True, dir_okay=False), help="MATRES gold labels; required for matres.")
+@click.option("--docs-dir", type=click.Path(exists=True, file_okay=False), help="TimeML documents; required for matres.")
+@click.option("--input-dir", type=click.Path(exists=True, file_okay=False), help="Native OmniTemp JSON split directory; required for omnitemp.")
+@click.option("--data-name", help="Dataset key (default: te3-platinum for matres, omnitemp for omnitemp).")
 @click.option("--output-dir", type=click.Path(), default="./data/TRC/raw_text")
 @click.option("--config-file", type=click.Path(exists=True))
 @click.option("--output-config", type=click.Path(), help="Save configuration pointing to the prepared corpus.")
 @click.option("--overwrite", is_flag=True)
 @click.pass_context
-def prepare_data(ctx, gold_file, docs_dir, data_name, output_dir, config_file, output_config, overwrite):
-    """Prepare pair and multi inputs from MATRES gold labels and TimeML documents."""
+def prepare_data(ctx, dataset_format, gold_file, docs_dir, input_dir, data_name, output_dir, config_file, output_config, overwrite):
+    """Prepare pair and multi inputs from MATRES/TimeML or native OmniTemp JSON."""
+    if dataset_format == "matres":
+        if input_dir is not None:
+            raise click.UsageError("--input-dir is only valid for --dataset-format omnitemp.")
+        if gold_file is None or docs_dir is None:
+            raise click.UsageError("MATRES requires both --gold-file and --docs-dir.")
+    else:
+        if gold_file is not None or docs_dir is not None:
+            raise click.UsageError("OmniTemp uses --input-dir, not --gold-file or --docs-dir.")
+        if input_dir is None:
+            raise click.UsageError("OmniTemp requires --input-dir.")
+    data_name = data_name or ("omnitemp" if dataset_format == "omnitemp" else "te3-platinum")
     try:
         manager = setup_config_manager(config_file, ctx.obj["config"])
         output = Path(output_dir)
         files = {mode: output / f"{mode}_{data_name.lower()}_text_w_relations_prepared.json" for mode in ("pair", "multi")}
-        for path in files.values():
+        gold_path = output / f"{data_name.lower()}_gold.tsv" if dataset_format == "omnitemp" else Path(gold_file)
+        outputs = [*files.values(), gold_path] if dataset_format == "omnitemp" else list(files.values())
+        for path in outputs:
             if path.exists() and not overwrite:
                 raise click.ClickException(f"Input already exists: {path}; use --overwrite to replace it.")
-        gold = load_data(Path(gold_file))
-        prepared = {mode: generate_training_dataset(gold, Path(docs_dir), mode) for mode in files}
-        if any(frame.empty for frame in prepared.values()):
-            raise click.ClickException("No annotated pairs matched the TimeML documents.")
+        if dataset_format == "omnitemp":
+            gold, prepared = prepare_omnitemp(Path(input_dir))
+        else:
+            gold = load_data(gold_path)
+            prepared = {mode: generate_training_dataset(gold, Path(docs_dir), mode) for mode in files}
+            if any(frame.empty for frame in prepared.values()):
+                raise click.ClickException("No annotated pairs matched the TimeML documents.")
         output.mkdir(parents=True, exist_ok=True)
-        for mode, frame in prepared.items():
-            prepare_as_jsonl(frame, files[mode], mode)
+        if dataset_format == "omnitemp":
+            gold.to_csv(gold_path, sep="\t", header=False, index=False)
+            click.echo(f"gold: {gold_path}")
+        for mode, data in prepared.items():
+            if dataset_format == "omnitemp":
+                files[mode].write_text(json.dumps(data, indent=2))
+            else:
+                prepare_as_jsonl(data, files[mode], mode)
             click.echo(f"{mode}: {files[mode]}")
         manager.data_config.datasets = dict(manager.data_config.datasets or {})
         manager.data_config.datasets[data_name] = {
-            "gold_file": str(Path(gold_file).resolve()),
+            "gold_file": str(gold_path.resolve()),
             "prepared_files": {mode: str(path.resolve()) for mode, path in files.items()},
         }
         manager.research_config.dataset = data_name
@@ -198,6 +225,9 @@ def batch_evaluate(ctx, model_names, methods, config_file, provider, **options):
         summary = Path(base.output_dir) / "batch_summary.csv"
         runner.save_batch_summary(results, summary)
         click.echo(f"Summary: {summary}")
+        for result in results:
+            if result.success:
+                _report(result)
         failures = [r.error for r in results if not r.success]
         if failures:
             raise click.ClickException("\n".join(failures))
@@ -240,7 +270,7 @@ def research(ctx, config_file, plan_only, **selection):
         click.echo(f"Summary: {summary}")
         for result in results:
             if result.success:
-                click.echo(f"Metrics: {result.metrics_path}")
+                _report(result)
         failures = [r.error for r in results if not r.success]
         if failures:
             raise click.ClickException("\n".join(failures))

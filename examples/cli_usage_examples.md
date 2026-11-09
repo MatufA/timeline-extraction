@@ -28,6 +28,40 @@ uv run python -m timeline_extraction.cli research --config-file config.yaml
 
 The default research goal is `classification` (pairwise accuracy). `consistency` runs document-level temporal-graph extraction. `comparison` runs both modes under the same model/method/corpus controls. These goals evaluate LLM predictions, not the paper's entire encoder-assisted cycle-resolution workflow.
 
+## OmniTemp
+
+[GlobalZeroShotTRE](https://github.com/AlonEirew/GlobalZeroShotTRE) links to the native [OmniTemp corpus](https://github.com/AlonEirew/event-relation-resources/tree/main/tre_datasets/OmniTemp). Obtain its `test/` and `train/` directories separately and retain the upstream `LICENSE.txt`. The [usage agreement](https://github.com/AlonEirew/event-relation-resources/blob/main/tre_datasets/OmniTemp/LICENSE.txt) restricts use to non-commercial research and education. Keep corpus files outside this code repository.
+
+For a corpus stored in the sibling data repository:
+
+```bash
+uv run python -m timeline_extraction.cli generate-config \
+    --goal comparison --provider antigravity --output omnitemp.yaml
+uv run python -m timeline_extraction.cli prepare-data \
+    --dataset-format omnitemp \
+    --input-dir ../timeline-extraction-data/data/OmniTemp/test \
+    --data-name omnitemp-test \
+    --output-dir ../timeline-extraction-data/data/TRC/raw_text \
+    --config-file omnitemp.yaml --output-config omnitemp.yaml
+uv run python -m timeline_extraction.cli research \
+    --config-file omnitemp.yaml --plan
+```
+
+Preparation and planning make no model requests. Run `research --config-file omnitemp.yaml` without `--plan` only when ready for inference. The generated Antigravity configuration selects Argon High; substitute another supported provider if needed.
+
+Each input JSON contains `tokens`, `allMentions` (`m_id`, `tokens_ids`), and `allPairs` (`_firstId`, `_secondId`, `_relation`). Preparation preserves numeric mention IDs, including zero, and marks spans by token position. Both modes use the full tokenized document; pair mode marks only its target events. Labels are canonicalized to numeric event-ID order, reversing BEFORE/AFTER when necessary. Only annotated pairs are emitted; EQUAL and VAGUE are retained.
+
+Besides pair/multi JSON arrays, OmniTemp preparation writes `<data-name>_gold.tsv` in the output directory. The saved configuration registers all three absolute paths for ordinary research/evaluation commands. All three artifacts require `--overwrite` before replacement. Do not combine `--input-dir` with MATRES `--gold-file` or `--docs-dir`.
+
+The verified upstream snapshot (`e4ea4055fbfeae79ac570252a18f198acaf2da5a`) contains:
+
+| Split | Documents | Annotated pairs |
+| --- | ---: | ---: |
+| test | 10 | 1,082 |
+| train | 20 | 2,401 |
+
+For training data, use `--input-dir .../OmniTemp/train`, a distinct `--data-name omnitemp-train`, and a separate output configuration. Never mix training documents into test evaluation. Native preparation does not import the upstream Gurobi optimizer or reproduce its consistency-optimization experiments.
+
 ## Compare providers and prompting methods
 
 ```bash
@@ -144,7 +178,7 @@ Pair/comb modes infer label parsing; multi mode infers JSON/DOT relation parsing
 
 ## Outputs and resume
 
-Each experiment writes `responses.jsonl`, `checkpoint.jsonl`, `parsed.csv`, `results.csv`, `metrics.csv`, and `metrics.json` beneath:
+Each experiment writes `responses.jsonl`, `checkpoint.jsonl`, `parsed.csv`, `results.csv`, `metrics.csv`, and `metrics.json` beneath the directory below. Document-level (`multi`) experiments additionally write `expanded_results.csv`.
 
 ```text
 results/<provider>/<model>/<mode>/<context>/<dataset>/<method>/<fingerprint>/
@@ -152,7 +186,13 @@ results/<provider>/<model>/<mode>/<context>/<dataset>/<method>/<fingerprint>/
 
 The fingerprint includes experimental/generation settings and prepared/gold contents. API keys are excluded, so credential rotation does not invalidate a cache. Re-running identical inputs resumes completed trials. Changing corpus contents or model settings selects separate artifacts. Pre-upgrade artifacts are not reused automatically.
 
-`research_summary.csv` identifies provider, model, goal, mode, method, success/error, and artifact paths. Metrics report full-gold accuracy, coverage, per-relation precision/recall/F1, macro/weighted/micro F1, and documents containing temporal cycles. Equality components are contracted before consistency checks. Missing predictions lower accuracy and coverage rather than disappearing from evaluation.
+`research_summary.csv` identifies provider, model, goal, mode, method, success/error, and artifact paths, including `expanded_results_path` for multi mode. Metrics report full-gold accuracy, coverage, per-relation precision/recall/F1, macro/weighted/micro F1, and documents containing temporal cycles. Missing predictions lower accuracy and coverage rather than disappearing from evaluation.
+
+`metrics.csv` retains two header rows. All modes use first-level names such as `explicit.accuracy`, `explicit.coverage`, and `explicit.BEFORE`; multi mode adds `expanded.accuracy`, `expanded.coverage`, and `expanded.BEFORE`. Per-relation precision/recall/F1 remain in the second header level. LangSmith trace outputs flatten these into names such as `expanded.BEFORE.f1`. There are no unqualified pipeline accuracy/F1 columns.
+
+Expanded scoring applies transitive completion **after** strict-majority voting, without new model requests or reference-label input. BEFORE/AFTER chains and EQUAL components entail missing edges; explicit labels, including explicit VAGUE, remain unchanged. Disconnected pairs stay unpredicted, not VAGUE. Components containing chronological cycles or ordering contradictions inside an equality group produce no inferred edges; independent consistent components can still expand.
+
+`expanded_results.csv` contains `docid`, canonical numeric-order event IDs, `p_label`, `unique_id`, and `is_inferred`. Explicit rows have `is_inferred=False`; derived rows have `True`. The original `results.csv`, responses, and checkpoints are not replaced by inferred edges. Pair/comb evaluation remains explicit-only.
 
 Re-evaluate saved responses without provider credentials:
 
