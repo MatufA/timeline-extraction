@@ -247,15 +247,26 @@ LangChain's standard provider integrations use API credentials. Its [Codex OAuth
 2. **Multi**: Multi-event temporal relation extraction
 3. **Comb**: Pairwise classification over prepared contextual event pairs
 
+### Graph evaluation
+
+Document-level (`multi`) evaluation reports separate **explicit** and **expanded** scores. Expanded scoring completes the voted graph transitively: A BEFORE B and B BEFORE C imply A BEFORE C. Equality components propagate equality and ordering; valid explicit labels are preserved.
+
+Completion never turns disconnected pairs into VAGUE or infers through contradictory graph components. `expanded_results.csv` marks inferred edges with `is_inferred`; `results.csv` remains the original voted output. See [output formats and cached rescoring](examples/cli_usage_examples.md#outputs-and-resume).
+
+Expanded scores measure graph entailment, not additional model generations. Compare the same scoring view when assessing model changes; historical scores were explicit-only.
+
 ### Datasets
 
 - **MATRES**: Multi-Aspect Temporal Relation Extraction [repo](https://github.com/qiangning/MATRES)
+- **OmniTemp**: Native JSON from [GlobalZeroShotTRE's dataset source](https://github.com/AlonEirew/event-relation-resources/tree/main/tre_datasets/OmniTemp), prepared with `prepare-data --dataset-format omnitemp --input-dir <split-directory>`. See the [OmniTemp CLI example](examples/cli_usage_examples.md#omnitemp).
 - **Narrative Time**: First timeline-based annotation framework that achieves full coverage of all possible TLINKS [repo](https://github.com/text-machine-lab/nt)
+
+OmniTemp uses the existing BEFORE/AFTER/EQUAL/VAGUE labels. Its [usage agreement](https://github.com/AlonEirew/event-relation-resources/blob/main/tre_datasets/OmniTemp/LICENSE.txt) permits non-commercial research and educational use only; corpus files are not bundled with this package.
 
 ## 🧪 Research Workflow
 
 1. **Setup**: Select a research goal/provider, set its API key, and supply the corpus
-2. **Preparation**: Run `prepare-data` against MATRES gold labels and matching TimeML documents
+2. **Preparation**: Run `prepare-data` against MATRES/TimeML inputs or a native OmniTemp split
 3. **Plan**: Inspect `research --plan` before making paid requests
 4. **Evaluation**: Run `research`, or use the explicit single/batch commands
 5. **Analysis**: Compare metrics and the provider/mode/method rows in `research_summary.csv`

@@ -21,6 +21,7 @@ from tqdm.auto import tqdm
 
 from timeline_extraction.data.postprocessing import majority_vote_decision_new
 from timeline_extraction.data.preprocessing import load_data
+from timeline_extraction.graph import Graph
 from timeline_extraction.metrics import summary_results
 from timeline_extraction.models.LLModel import LLModel, LabelParser, JsonParser
 from timeline_extraction.prompts.Prompt import Prompt, PairwisePrompt, MultiEvents
@@ -103,6 +104,7 @@ class ExperimentResult:
     provider: Optional[str] = None
     mode: Optional[str] = None
     research_goal: Optional[str] = None
+    expanded_results_path: Optional[Path] = None
 
 
 class ModelFactory:
@@ -290,6 +292,7 @@ class TimelineExtractionPipeline:
             "llm_response": artifact_dir / "responses.jsonl",
             "parsed_response": artifact_dir / "parsed.csv",
             "results": artifact_dir / "results.csv",
+            "expanded_results": artifact_dir / "expanded_results.csv",
             "checkpoint": artifact_dir / "checkpoint.jsonl",
             "metrics": artifact_dir / "metrics.csv",
             "raw_text": raw_text,
@@ -360,7 +363,9 @@ class TimelineExtractionPipeline:
                     "success": result.success,
                     "execution_time": result.execution_time,
                     "artifacts": {
-                        name: str(path) for name in ("results_path", "metrics_path", "metadata_path")
+                        name: str(path) for name in (
+                            "results_path", "expanded_results_path", "metrics_path", "metadata_path"
+                        )
                         if (path := getattr(result, name)) is not None
                     },
                 }
@@ -423,10 +428,11 @@ class TimelineExtractionPipeline:
             metrics_path = self._get_summary_results(
                 config, results_path, paths
             )
+            expanded_results_path = paths["expanded_results"] if config.mode == "multi" else None
             
             # Create metadata
             metadata_path = self._save_metadata(
-                config, results_path, metrics_path, start_time, model_config
+                config, results_path, metrics_path, start_time, model_config, expanded_results_path
             )
             
             execution_time = (datetime.now() - start_time).total_seconds()
@@ -438,6 +444,7 @@ class TimelineExtractionPipeline:
                 results_path=results_path,
                 metrics_path=metrics_path,
                 metadata_path=metadata_path,
+                expanded_results_path=expanded_results_path,
                 execution_time=execution_time,
                 model_name=config.model_name,
                 method=config.method,
@@ -595,8 +602,18 @@ class TimelineExtractionPipeline:
         results_df = pd.read_csv(results_path)
         results_df = results_df.drop_duplicates(["docid", "unique_id"])
 
-        # Calculate summary
-        df = summary_results(results_df, gold_df, config.model_name)
+        # Complete the voted graph only; explicit artifacts and generation caches stay untouched.
+        summaries = {"explicit": summary_results(results_df, gold_df, config.model_name)}
+        if config.mode == "multi":
+            expanded_df = Graph(relation_key="p_label").generate_implicit_relations(results_df)
+            expanded_df.to_csv(paths["expanded_results"], index=False)
+            summaries["expanded"] = summary_results(expanded_df, gold_df, config.model_name)
+        for view, summary in summaries.items():
+            summary.columns = pd.MultiIndex.from_tuples(
+                [(f"{view}.{name}", metric) for name, metric in summary.columns],
+                names=summary.columns.names,
+            )
+        df = pd.concat(summaries.values(), axis=1)
         df["method"] = config.method
         df["suffix_path"] = config.suffix_path
         df["model_name"] = config.model_name
@@ -615,6 +632,7 @@ class TimelineExtractionPipeline:
         metrics_path: Path,
         start_time: datetime,
         model_config: ModelConfig,
+        expanded_results_path: Optional[Path] = None,
     ) -> Path:
         """Save experiment metadata.
         
@@ -635,6 +653,7 @@ class TimelineExtractionPipeline:
             "file_paths": {
                 "results_path": str(results_path),
                 "metrics_path": str(metrics_path),
+                "expanded_results_path": str(expanded_results_path) if expanded_results_path else None,
             },
             "timing": {
                 "start_time": start_time.isoformat(),
@@ -748,6 +767,7 @@ class BatchExperimentRunner:
                 "execution_time": result.execution_time,
                 "error": result.error,
                 "results_path": str(result.results_path) if result.results_path else None,
+                "expanded_results_path": str(result.expanded_results_path) if result.expanded_results_path else None,
                 "metrics_path": str(result.metrics_path) if result.metrics_path else None,
             })
         

@@ -6,6 +6,13 @@ import logging
 from itertools import chain, combinations, product, starmap
 from functools import partial
 
+from timeline_extraction.utils import (
+    create_unique_id,
+    normalize_event_id,
+    normalize_relation,
+    validate_temporal_relation,
+)
+
 
 class Graph:
     def __init__(
@@ -166,46 +173,92 @@ class Graph:
 
         return cycles
 
-    def generate_implicit_relations(self, df: pd.DataFrame):
-        self.use_equal = True
+    def generate_implicit_relations(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Complete voted predictions without consulting gold or changing this graph.
 
-        if "EQUAL" not in self.supported_relation:
-            self.supported_relation.append("EQUAL")
-
-        data = []
-        for doc_id, group_df in df.groupby("docid"):
-            self.equal_mapping = {}
-            doc_graph: nx.DiGraph = self.generate_directed_graph(group_df)
-            ids_groups = list(set(group_df.eiid1) | set(group_df.eiid2))
-            rel_combs = combinations(ids_groups, 2)
-            for e1, e2 in rel_combs:
-                e1 = min(e1, e2)
-                e2 = max(e1, e2)
-
-                e1 = self.equal_mapping.get(e1, e1)
-                e2 = self.equal_mapping.get(e2, e2)
-
-                if nx.shortest_path(doc_graph, source=e1, target=e2):
-                    relation = "BEFORE"
-                elif nx.shortest_path(doc_graph, source=e2, target=e1):
-                    relation = "AFTER"
-                else:
-                    relation = "VAGUE"
-
-                e1_split = e1.split("$")
-                e2_split = e2.split("$")
-                for eiid1, eiid2 in product(e1_split, e2_split):
-                    data.append((doc_id, eiid1, eiid2, relation))
-
-        df = pd.DataFrame(data, columns=["doc_id", "eiid1", "eiid2", "relation"])
-        # df['relation'] = df.relation.str.split('$')
-        # df = df.explode('relation').reset_index(drop=True)
-
-        eiid1_eiid2 = list(zip(df["eiid1"], df["eiid2"]))
-        df["unique_id"] = [
-            "-".join(sorted([eiid1, eiid2])) for eiid1, eiid2 in eiid1_eiid2
+        Explicit labels take precedence over inferred labels. Conflicting duplicate
+        pairs raise ValueError after numeric canonicalization. Equality is contracted
+        per document; a directed cycle (including a contraction-induced self-loop)
+        disables all inference in its weakly connected component. Self-pairs are
+        never returned, but explicit temporal self-loops still block inference.
+        """
+        columns = [
+            "docid", "eiid1", "eiid2", self.relation_key, "unique_id", "is_inferred"
         ]
-        return df
+        output = []
+        if df.empty:
+            return pd.DataFrame(columns=columns).astype({"is_inferred": bool})
+
+        for docid, group in df.groupby("docid", sort=True):
+            relations = {}
+            for first, second, label in group[
+                ["eiid1", "eiid2", self.relation_key]
+            ].itertuples(index=False, name=None):
+                if not isinstance(label, str):
+                    continue
+                label = normalize_relation(label)
+                if not validate_temporal_relation(label):
+                    continue
+                first = int(normalize_event_id(str(first))[2:])
+                second = int(normalize_event_id(str(second))[2:])
+                if first > second:
+                    first, second = second, first
+                    label = {"BEFORE": "AFTER", "AFTER": "BEFORE"}.get(label, label)
+                pair = (first, second)
+                if pair in relations and relations[pair][0] != label:
+                    raise ValueError(
+                        f"Conflicting explicit labels for {docid}: ei{first}, ei{second}"
+                    )
+                relations[pair] = (label, False)
+
+            equality = nx.Graph()
+            for (first, second), (label, _) in relations.items():
+                equality.add_nodes_from((first, second))
+                if label == "EQUAL":
+                    equality.add_edge(first, second)
+            members = {}
+            representatives = {}
+            for component in nx.connected_components(equality):
+                ordered = sorted(component)
+                representative = ordered[0]
+                members[representative] = ordered
+                representatives.update(dict.fromkeys(component, representative))
+
+            before = nx.DiGraph()
+            before.add_nodes_from(members)
+            for (first, second), (label, _) in relations.items():
+                if label == "AFTER":
+                    first, second = second, first
+                if label in {"BEFORE", "AFTER"}:
+                    before.add_edge(representatives[first], representatives[second])
+
+            for component in nx.weakly_connected_components(before):
+                directed = before.subgraph(component)
+                if not nx.is_directed_acyclic_graph(directed):
+                    continue
+                for representative in component:
+                    for pair in combinations(members[representative], 2):
+                        relations.setdefault(pair, ("EQUAL", True))
+                # Compute reachability once, then expand contracted equality nodes.
+                closure = nx.transitive_closure_dag(directed)
+                for source, target in closure.edges:
+                    for first, second in product(members[source], members[target]):
+                        if first < second:
+                            pair, label = (first, second), "BEFORE"
+                        else:
+                            pair, label = (second, first), "AFTER"
+                        relations.setdefault(pair, (label, True))
+
+            for (first, second), (label, inferred) in sorted(relations.items()):
+                if first == second:
+                    continue
+                eiid1, eiid2 = f"ei{first}", f"ei{second}"
+                output.append((
+                    docid, eiid1, eiid2, label,
+                    create_unique_id(eiid1, eiid2), inferred,
+                ))
+
+        return pd.DataFrame(output, columns=columns).astype({"is_inferred": bool})
 
 
 def create_simple_graph(graph):

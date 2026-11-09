@@ -1,12 +1,15 @@
 """Behavioral CLI regressions for research selection and configuration precedence."""
 
+import csv
 import json
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
 from timeline_extraction.cli import cli
 from timeline_extraction.config import ConfigManager, ModelConfig
+from timeline_extraction.data.preprocessing import load_data
 
 
 def test_comparison_plan_preserves_provider_and_method_controls(tmp_path):
@@ -105,3 +108,148 @@ def test_prepare_data_exports_usable_pair_and_document_inputs(tmp_path):
     ])
     assert second.exit_code != 0
     assert json.loads((output / "pair_custom_text_w_relations_prepared.json").read_text()) == pair
+
+
+@pytest.fixture
+def omnitemp_input(tmp_path):
+    source = tmp_path / "native"
+    source.mkdir()
+    (source / "sample.json").write_text(json.dumps({
+        "tokens": ["Dawn", "rose", "and", "rain", "fell", "then", "winds", "eased", "and", "stopped", "."],
+        "allMentions": [
+            {"tokens": "Dawn", "eventIndex": 0, "m_id": "99", "tokens_ids": [0]},
+            {"tokens": "rose", "eventIndex": 1, "m_id": "10", "tokens_ids": [1]},
+            {"tokens": "fell", "eventIndex": 2, "m_id": "2", "tokens_ids": [4]},
+            {"tokens": "eased", "eventIndex": 3, "m_id": "0", "tokens_ids": [7]},
+            {"tokens": "stopped", "eventIndex": 4, "m_id": "11", "tokens_ids": [9]},
+        ],
+        "allPairs": [
+            {"_firstId": "10", "_secondId": 2, "_relation": "before"},
+            {"_firstId": 2, "_secondId": "0", "_relation": "after"},
+            {"_firstId": "10", "_secondId": 0, "_relation": "equal"},
+            {"_firstId": 10, "_secondId": "11", "_relation": "vague"},
+        ],
+    }))
+    return source
+
+
+def test_prepare_omnitemp_exports_gold_and_both_research_modes(tmp_path, omnitemp_input):
+    output = tmp_path / "prepared"
+    config = tmp_path / "research.yaml"
+    original = (omnitemp_input / "sample.json").read_bytes()
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "prepare-data", "--dataset-format", "omnitemp", "--input-dir", str(omnitemp_input),
+        "--output-dir", str(output), "--output-config", str(config),
+    ])
+    assert result.exit_code == 0, result.output
+    assert (omnitemp_input / "sample.json").read_bytes() == original
+    gold_path = output / "omnitemp_gold.tsv"
+    with gold_path.open() as file:
+        rows = list(csv.reader(file, delimiter="\t"))
+    expected = {
+        ("ei2", "ei10"): ("fell", "rose", "AFTER"),
+        ("ei0", "ei2"): ("eased", "fell", "BEFORE"),
+        ("ei0", "ei10"): ("eased", "rose", "EQUAL"),
+        ("ei10", "ei11"): ("rose", "stopped", "VAGUE"),
+    }
+    assert len(rows) == len(expected)
+    assert all(len(row) == 6 and row[0] == "sample" for row in rows)
+    assert {(row[3], row[4]): (row[1], row[2], row[5]) for row in rows} == expected
+    assert len(load_data(gold_path)) == len(expected)
+
+    pair_path = output / "pair_omnitemp_text_w_relations_prepared.json"
+    multi_path = output / "multi_omnitemp_text_w_relations_prepared.json"
+    pair = json.loads(pair_path.read_text())
+    multi = json.loads(multi_path.read_text())
+    assert len(pair) == len(expected)
+    for record in pair:
+        assert record["doc_id"] == "sample"
+        assert len(record["relations"]) == 1
+        relation = tuple(record["relations"][0])
+        assert record["true_label"] == expected[relation][2].lower()
+        assert record["text"].count("[EVENT") == 2
+        assert record["text"].startswith("Dawn ")
+        assert record["text"].endswith(".")
+        for event, surface in zip(relation, expected[relation][:2]):
+            assert f"[EVENT{event[2:]}]{surface}[/EVENT{event[2:]}]" in record["text"]
+    assert len(multi) == 1
+    assert multi[0]["doc_id"] == "sample"
+    assert dict(zip(map(tuple, multi[0]["relations"]), multi[0]["true_label"])) == {
+        relation: values[2] for relation, values in expected.items()
+    }
+    for event, surface in {"0": "eased", "2": "fell", "10": "rose", "11": "stopped"}.items():
+        assert multi[0]["text"].count(f"[EVENT{event}]{surface}[/EVENT{event}]") == 1
+    assert "[EVENT99]" not in multi[0]["text"]
+
+    manager = ConfigManager(config)
+    assert manager.research_config.dataset == "omnitemp"
+    assert manager.data_config.datasets["omnitemp"] == {
+        "gold_file": str(gold_path.resolve()),
+        "prepared_files": {"pair": str(pair_path.resolve()), "multi": str(multi_path.resolve())},
+    }
+    plan_result = runner.invoke(cli, [
+        "research", "--config-file", str(config), "--goal", "comparison", "--plan",
+    ])
+    assert plan_result.exit_code == 0, plan_result.output
+    assert {row["experiment"]["mode"] for row in json.loads(plan_result.output)} == {"pair", "multi"}
+
+
+@pytest.mark.parametrize("options", [
+    [],
+    ["--gold-file"],
+    ["--docs-dir"],
+    ["--input-dir"],
+    ["--dataset-format", "omnitemp"],
+    ["--dataset-format", "omnitemp", "--gold-file", "--input-dir"],
+    ["--dataset-format", "omnitemp", "--docs-dir", "--input-dir"],
+    ["--gold-file", "--docs-dir", "--input-dir"],
+])
+def test_prepare_data_rejects_missing_or_mixed_sources(tmp_path, omnitemp_input, options):
+    gold = tmp_path / "gold.tsv"
+    gold.write_text("sample\trose\tfell\t10\t2\tBEFORE\n")
+    values = {"--gold-file": gold, "--docs-dir": omnitemp_input, "--input-dir": omnitemp_input}
+    arguments = []
+    for option in options:
+        arguments.append(option)
+        if option in values:
+            arguments.append(str(values[option]))
+    output = tmp_path / "prepared"
+    config = tmp_path / "research.yaml"
+    result = CliRunner().invoke(cli, [
+        "prepare-data", *arguments, "--output-dir", str(output), "--output-config", str(config),
+    ])
+    assert result.exit_code != 0
+    assert not output.exists()
+    assert not config.exists()
+
+
+@pytest.mark.parametrize("existing", [
+    "omnitemp_gold.tsv",
+    "pair_omnitemp_text_w_relations_prepared.json",
+    "multi_omnitemp_text_w_relations_prepared.json",
+])
+def test_prepare_omnitemp_preflights_every_output(tmp_path, omnitemp_input, existing):
+    output = tmp_path / "prepared"
+    output.mkdir()
+    existing_path = output / existing
+    existing_path.write_bytes(b"preserve this artifact")
+    config = tmp_path / "research.yaml"
+    config.write_text("preserve this config")
+    arguments = [
+        "prepare-data", "--dataset-format", "omnitemp", "--input-dir", str(omnitemp_input),
+        "--output-dir", str(output), "--output-config", str(config),
+    ]
+    result = CliRunner().invoke(cli, arguments)
+    assert result.exit_code != 0
+    assert existing_path.read_bytes() == b"preserve this artifact"
+    assert set(output.iterdir()) == {existing_path}
+    assert config.read_text() == "preserve this config"
+    replaced = CliRunner().invoke(cli, [*arguments, "--overwrite"])
+    assert replaced.exit_code == 0, replaced.output
+    assert existing_path.read_bytes() != b"preserve this artifact"
+    assert {path.name for path in output.iterdir()} == {
+        "omnitemp_gold.tsv",
+        "pair_omnitemp_text_w_relations_prepared.json",
+        "multi_omnitemp_text_w_relations_prepared.json",
+    }
