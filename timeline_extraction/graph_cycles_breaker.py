@@ -128,7 +128,7 @@ def evaluate_by_relabel(
                     print(f"unable to process res: {response}")
                     continue
 
-                for r in res["response"]:
+                for r in model.parser(res):
                     eiid1 = r["event1"].replace("EVENT", "ei")
                     eiid2 = r["event2"].replace("EVENT", "ei")
                     unique_id = "-".join(sorted([eiid1, eiid2]))
@@ -191,19 +191,12 @@ def evaluate(model_name, prompt_template, data_path, cycley_data, result_path_na
             )
             response = model.generate_response(prompt)
 
-            model_response = [
-                {
-                    "trail": idx,
-                    "response": choice.message.parsed.unique_ids,
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                }
-                for idx, choice in enumerate(response.choices)
-            ]
+            model_response = model.prepare_response(response)
+            for res in model_response:
+                res["response"] = json.loads(res["content"])["unique_ids"]
 
             count = Counter([idx for res in model_response for idx in res["response"]])
-            max_choosen = max(count.values())
+            max_choosen = max(count.values(), default=0)
             majority_vote_drop_ids = [
                 index for index, freq in count.items() if freq == max_choosen
             ]

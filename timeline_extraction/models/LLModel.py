@@ -1,9 +1,10 @@
 import re
 import abc
 import json
-from typing import List, Type, Optional, Dict, Any
+import hashlib
+from copy import deepcopy
+from typing import List, Type, Optional, Dict, Any, Union
 
-import pandas as pd
 from time import sleep
 from pathlib import Path
 from tqdm.auto import tqdm
@@ -12,30 +13,16 @@ from timeline_extraction.prompts.Prompt import Prompt
 
 
 def parse_dot_graph(dot_graph: str) -> List[Dict[str, str]]:
-    # Extract edges from the DOT graph
-    edge_pattern = r'"?(EVENT\d+)"?\s*->\s*"?(EVENT\d+)"?\s*\[label="?([\w]*)"?\]?'
-    matches = re.findall(edge_pattern, dot_graph)
-
-    # Create a list of dictionaries from the matches
-    relations = [
-        {"event1": match[0], "event2": match[1], "relation": match[2]}
-        for match in matches
+    """Extract temporal edges from either EVENT, ei, or e DOT identifiers."""
+    pattern = r'"?((?:EVENT|ei|e)\d+)"?\s*->\s*"?((?:EVENT|ei|e)\d+)"?\s*\[label\s*=\s*"?(\w+)"?\s*\]'
+    return [
+        {
+            "event1": f"EVENT{re.search(r'\d+$', e1).group()}",
+            "event2": f"EVENT{re.search(r'\d+$', e2).group()}",
+            "relation": relation,
+        }
+        for e1, e2, relation in re.findall(pattern, dot_graph, flags=re.IGNORECASE)
     ]
-
-    if not relations:
-        edge_pattern = r'"?(e\d+)"?\s*->\s*"?(e\d+)"?\s*\[label=("?[\w]*)"?\]?'
-        matches = re.findall(edge_pattern, dot_graph)
-
-        relations = [
-            {
-                "event1": match[0].replace("e", "EVENT"),
-                "event2": match[1].replace("e", "EVENT"),
-                "relation": match[2],
-            }
-            for match in matches
-        ]
-
-    return relations
 
 
 class Parser:
@@ -62,7 +49,7 @@ class LabelParser(Parser):
 
     def __call__(
         self, model_response: Dict[str, Any], *args, **kwargs
-    ) -> Optional[str]:
+    ) -> Dict[str, Any]:
         start_pattern = r"^(before|after|equal|vague)\b"
         end_pattern = r"\b(before|after|equal|vague)(?:[.!?]|\s*$)"
         if start_label_match := re.search(
@@ -81,84 +68,67 @@ class LabelParser(Parser):
 
 
 class JsonParser(Parser):
-    """Parser for extracting JSON-formatted temporal relations from model responses."""
+    """Parse JSON or DOT relations, preserving direction when canonicalizing IDs."""
+
+    @staticmethod
+    def _event_number(value: Any) -> Optional[int]:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            match = re.search(r"\d+$", value.strip())
+            if match:
+                return int(match.group())
+        return None
 
     def __call__(
         self, model_response: Dict[str, Any], *args, **kwargs
     ) -> List[Dict[str, Any]]:
-        if isinstance(model_response["response"], list) and isinstance(
-            model_response["response"][0], dict
-        ):
-            formated_response = model_response["response"]
-        else:
-            content = (
-                model_response["content"].strip().replace("[", "").replace("]", "")
-            )
-            content = f"[{content}]"
-
+        response = model_response.get("response", model_response.get("content", ""))
+        if isinstance(response, str):
+            content = response.strip()
+            content = re.sub(r"^```(?:json|dot)?\s*|\s*```$", "", content)
             try:
-                formated_response = json.loads(content.replace("\n", ""))
+                response = json.loads(content)
             except json.JSONDecodeError:
-                try:
-                    formated_response = json.loads(
-                        model_response["content"].replace(",\n", "").replace("\n", "")
-                    )
-                except json.JSONDecodeError:
-                    formated_response = []
-                    for rec in (
-                        model_response["content"]
-                        .replace("\n", "")
-                        .replace("},{", "}${")
-                        .split("$")
-                    ):
+                response = parse_dot_graph(content)
+                if not response:
+                    # Some models emit a sequence of JSON objects instead of an array.
+                    response = []
+                    decoder = json.JSONDecoder()
+                    while content:
                         try:
-                            formated_response.append(json.loads(rec))
+                            record, end = decoder.raw_decode(content)
                         except json.JSONDecodeError:
-                            pass
+                            break
+                        response.append(record)
+                        content = content[end:].lstrip(" ,\n\r\t")
+        if isinstance(response, dict):
+            response = [response]
+        if not isinstance(response, list):
+            return []
 
-        if isinstance(formated_response, list):
-            new_formated_response = []
-            for record in formated_response:
-                try:
-                    e1, e2 = record["event1"], record["event2"]
-                except KeyError:
-                    e1_key, e2_key = sorted(
-                        [k for k in record if "event" in k],
-                        key=lambda e: int(re.search(r"\d+$", e).group()),
-                    )
-                    e1, e2 = record[e1_key], record[e2_key]
-
-                # validate events are not None
-                if not e1 and not e2:
-                    continue
-
-                # parse and fix events formate
-                if not isinstance(e1, int) and not isinstance(e2, int):
-                    events = [e1, e2]
-                    formated_events = []
-                    for e in events:
-                        if number_from_end := re.search(r"\d+$", e):
-                            formated_events.append(int(number_from_end.group()))
-                        elif number_from_start := re.search(r"^\d+", e):
-                            formated_events.append(int(number_from_start.group()))
-                        else:
-                            print(f"unsupported record: {record}")
-                else:
-                    formated_events = [e1, e2]
-
-                if formated_events:
-                    new_recored = record.copy()
-                    new_recored["event1"], new_recored["event2"] = (
-                        f"ei{min(formated_events)}",
-                        f"ei{max(formated_events)}",
-                    )
-                    new_formated_response.append(new_recored)
-
-            df = pd.DataFrame.from_dict(new_formated_response)
-            df = df.drop_duplicates()
-            formated_response = df.to_dict(orient="records")
-
-        return formated_response
+        records = []
+        seen = set()
+        for record in response:
+            if not isinstance(record, dict):
+                continue
+            e1 = self._event_number(record.get("event1"))
+            e2 = self._event_number(record.get("event2"))
+            relation = record.get("relation")
+            if e1 is None or e2 is None or e1 == e2 or not isinstance(relation, str):
+                continue
+            relation = relation.strip().upper()
+            if relation not in {"BEFORE", "AFTER", "EQUAL", "VAGUE"}:
+                continue
+            if e1 > e2:
+                e1, e2 = e2, e1
+                relation = {"BEFORE": "AFTER", "AFTER": "BEFORE"}.get(relation, relation)
+            key = (e1, e2, relation)
+            if key in seen:
+                continue
+            seen.add(key)
+            records.append({**record, "event1": f"ei{e1}", "event2": f"ei{e2}", "relation": relation})
+        return records
 
 
 class LLModel(abc.ABC):
@@ -181,6 +151,8 @@ class LLModel(abc.ABC):
             n_trails: Number of trials to run
             parser: Parser class for processing model responses
         """
+        if n_trails < 1:
+            raise ValueError("n_trails must be positive")
         self.model = model
         self.each_trail = each_trail
         self.each_doc = each_doc
@@ -188,26 +160,26 @@ class LLModel(abc.ABC):
         self.parser = parser()
 
     @abc.abstractmethod
-    def generate_response(self, prompt: str) -> Dict[str, Any]:
+    def generate_response(self, prompt: Union[str, List[Dict[str, str]]]) -> List[Any]:
         """Generate a response from the model for the given prompt.
 
         Args:
             prompt: The input prompt for the model
 
         Returns:
-            Dictionary containing the model response and metadata
+            Native responses, one for each trial
         """
         pass
 
     @abc.abstractmethod
-    def prepare_response(self, response: Any) -> Dict[str, Any]:
+    def prepare_response(self, response: Any) -> List[Dict[str, Any]]:
         """Prepare and format the raw model response.
 
         Args:
             response: Raw response from the model
 
         Returns:
-            Formatted response dictionary
+            Independent normalized trial dictionaries including raw content
         """
         pass
 
@@ -219,6 +191,7 @@ class LLModel(abc.ABC):
         prompt_params: Optional[List[str]] = None,
         overwrite: bool = False,
         checkpoint_results: Optional[Path] = None,
+        response_generator=None,
     ) -> List[Dict[str, Any]]:
         """Generate responses for all records in the text file.
 
@@ -229,119 +202,98 @@ class LLModel(abc.ABC):
             prompt_params: Parameters for the prompt template
             overwrite: Whether to overwrite existing results
             checkpoint_results: Path to save checkpoint results
+            response_generator: Optional instrumented generation callable returning normalized trials
 
         Returns:
             List of generated responses
         """
         if prompt_params is None:
             prompt_params = ["text"]
-
-        records = json.load(text_path.open("r"))
+        with text_path.open() as file:
+            records = json.load(file)
+        results_path.parent.mkdir(parents=True, exist_ok=True)
         if checkpoint_results:
-            with checkpoint_results.open("w") as clean_file:
-                clean_file.write("")
-        # if 'relations' in prompt_params:
-        # prompt_params = ['text']
-        # for record in records:
-        #     rels = []
-        #     for rel in record['relations'].split('\n'):
-        #         e1, e2 = rel.split(' [RELATION] ')
-        #         e1, e2 = e1.strip(), e2.strip()
-        #         # rels.append(json.dumps({"event1": e1, "event2": e2}))
-        #         rels.append(f'{e1} {e2}')
-        #         new_records.append({
-        #             'text': replace_eid(record['text'], exclude_ids=[e1, e2]),
-        #             'doc_id': record["doc_id"],
-        #             'e1': e1,
-        #             'e2': e2
-        #             })
+            checkpoint_results.parent.mkdir(parents=True, exist_ok=True)
 
-        # record['relations'] = '\n'.join(rels)
+        completed = {}
+        saved_rows = {}
+        if not overwrite:
+            if checkpoint_results and checkpoint_results.exists():
+                with checkpoint_results.open() as file:
+                    for line in file:
+                        if not line.strip():
+                            continue
+                        response = json.loads(line)
+                        if "request_key" in response:
+                            completed.setdefault(response["request_key"], {})[int(response["trail"])] = response
+            if results_path.exists():
+                with results_path.open() as file:
+                    for line in file:
+                        if not line.strip():
+                            continue
+                        response = json.loads(line)
+                        if "request_key" in response:
+                            saved_rows.setdefault(response["request_key"], {}).setdefault(
+                                int(response["trail"]), []
+                            ).append(response)
 
-        # prompt_template = prompt_path.open('r').read()
-
-        if not overwrite and results_path.exists():
-            write_mode = "a"
-            for record in records:
-                record["key"] = (
-                    record["doc_id"] + "-" + "-".join(record["relations"][0])
+        checkpoint_mode = "w" if overwrite else "a"
+        if checkpoint_results and overwrite:
+            checkpoint_results.write_text("")
+        results = []
+        for index, record in enumerate(tqdm(records, desc="Text evaluation", position=0, leave=True)):
+            prompt = prompt_template.generate_dict_prompt(
+                **{parameter: record[parameter] for parameter in prompt_params}
+            )
+            identity = json.dumps(
+                {"index": index, "record": record, "prompt": prompt},
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            request_key = hashlib.sha256(identity.encode()).hexdigest()
+            trials = completed.get(request_key, {})
+            prior_rows = saved_rows.get(request_key, {})
+            if not all(trial in trials or trial in prior_rows for trial in range(self.n_trails)):
+                responses = (
+                    response_generator(prompt) if response_generator
+                    else self.prepare_response(self.generate_response(prompt))
                 )
-
-            records_partial_df: pd.DataFrame = pd.read_json(results_path, lines=True)
-
-            if not records_partial_df.empty:
-                # doc_iter = records_partial_df.groupby('doc_id')['n_tokens'].count().to_dict()
-
-                # doc_iter = records_partial_df.key.unique()
-                # records = (record for record in records if record['doc_id'] not in doc_iter)
-
-                doc_iter = set(
-                    records_partial_df.apply(
-                        lambda row: row["doc_id"] + "-" + "-".join(row["relations"][0]),
-                        axis="columns",
-                    )
-                )
-                records = [
-                    record for record in records if record["key"] not in doc_iter
-                ]
-        else:
-            write_mode = "w"
-
-        resluts = []
-        with results_path.open(write_mode) as file:
-            for record in tqdm(records, desc="Text evaluation", position=0, leave=True):
-                prompt = prompt_template.generate_dict_prompt(
-                    **{p: record[p] for p in prompt_params}
-                )
-                response = self.generate_response(prompt)
-
-                if checkpoint_results:
-                    with checkpoint_results.open("a") as c_file:
-                        for choice in response.choices:
-                            choice_result = dict()
-                            choice_result["doc_id"] = record["doc_id"]
-                            choice_result["prompt"] = prompt
-                            choice_result["raw_content"] = choice.message.content
-                            if isinstance(self.parser, LabelParser):
-                                choice_result["relations"] = choice.message.content
-                            else:
-                                choice_result["relations"] = parse_dot_graph(
-                                    dot_graph=choice.message.content
-                                )
-                            j_line = json.dumps(choice_result)
-                            c_file.write(j_line + "\n")
-
-                for res in self.prepare_response(response):
-                    res.update(record)
-                    res["prompt"] = prompt
-                    if not res:
-                        print(f"unable to process res: {response}")
+                for response in responses:
+                    trial = int(response["trail"])
+                    if trial in trials or trial in prior_rows:
                         continue
-                    parsed_response = self.parser(res)
-                    if not isinstance(parsed_response, list):
-                        parsed_response = [parsed_response]
+                    normalized = {
+                        **deepcopy(record),
+                        **deepcopy(response),
+                        "prompt": prompt,
+                        "request_key": request_key,
+                    }
+                    trials[trial] = normalized
+                    if checkpoint_results:
+                        with checkpoint_results.open(checkpoint_mode) as file:
+                            file.write(json.dumps(normalized) + "\n")
+                        checkpoint_mode = "a"
+                if self.each_doc:
+                    sleep(2)
+            for trial in range(self.n_trails):
+                if trial in prior_rows and trial not in trials:
+                    results.extend(deepcopy(prior_rows[trial]))
+                    continue
+                if trial not in trials:
+                    raise ValueError(f"Provider returned no response for trial {trial}")
+                normalized = trials[trial]
+                parsed = self.parser(deepcopy(normalized))
+                if isinstance(parsed, dict):
+                    results.append(parsed)
+                else:
+                    for relation in parsed:
+                        results.append({
+                            **deepcopy(normalized),
+                            "response": relation["relation"],
+                            "relations": [[relation["event1"], relation["event2"]]],
+                        })
 
-                    for p_response in parsed_response:
-                        if not isinstance(self.parser, LabelParser):
-                            res["response"] = p_response["relation"]
-                            # if len(res['relations']) > 1:
-                            events = [p_response["event1"], p_response["event2"]]
-                            res["relations"] = [events]
-                        # if isinstance(prompt_template, PairwisePrompt) and not isinstance(res['response'], dict) :
-                        #     start_pattern = r'^(before|after|equal|vague)\b'
-                        #     end_pattern = r'\b(before|after|equal|vague)(?:[.!?]|\s*$)'
-                        #     if start_label_match := re.search(start_pattern, res['response'].lower()):
-                        #         plabel = start_label_match.group(1)
-                        #     elif end_label_match := re.search(end_pattern, res['response'].lower()):
-                        #         plabel = end_label_match.group(1)
-                        #     else:
-                        #         plabel = res['response']
-
-                        #     res['response'] = plabel
-
-                        json_line = json.dumps(res)
-                        file.write(json_line + "\n")
-                        resluts.append(res)
-
-                sleep(2) if self.each_doc else None
-        return resluts
+        with results_path.open("w") as file:
+            for result in results:
+                file.write(json.dumps(result) + "\n")
+        return results

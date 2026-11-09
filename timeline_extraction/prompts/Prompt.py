@@ -1,4 +1,5 @@
 from typing import List, Optional
+import re
 
 
 class Prompt:
@@ -199,13 +200,25 @@ class PairwisePrompt(Prompt):
 
         self.instruction = """in one word --> """
 
+    def _pair_instruction(self, relations):
+        if relations is None:
+            return self.instruction
+        first, second = relations[0]
+        first_id = re.search(r"\d+$", str(first)).group()
+        second_id = re.search(r"\d+$", str(second)).group()
+        return (
+            f"Classify EVENT{first_id} relative to EVENT{second_id}, "
+            "regardless of their order of appearance in the text. "
+            f"{self.instruction}"
+        )
+
     def generate_prompt(self, text: str, relations: Optional[str] = None):
         assert text is not None, "text not provided"
 
         full_prompt = self.system
 
         context = self.context.format(text=text)
-        instruction = self.instruction.format(relations=relations)
+        instruction = self._pair_instruction(relations)
         return f"""{full_prompt} \n{context} \n{instruction}"""
 
     def generate_dict_prompt(self, text: str, relations: Optional[str] = None):
@@ -219,7 +232,7 @@ class PairwisePrompt(Prompt):
 
         return [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": f"{context}\n{self.instruction}"},
+            {"role": "user", "content": f"{context}\n{self._pair_instruction(relations)}"},
         ]
 
 

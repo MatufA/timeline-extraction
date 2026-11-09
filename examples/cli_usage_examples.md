@@ -1,276 +1,174 @@
-# CLI Usage Examples - Elegant Pipeline
+# Research CLI usage
 
-This document provides examples of how to use the updated CLI with the new elegant pipeline implementation.
+## Configure, prepare, inspect, run
 
-## 🚀 Quick Start
-
-### 1. Generate Configuration File
-
-First, generate a default configuration file:
+Install the locked environment and generate a goal-based configuration:
 
 ```bash
-python -m timeline_extraction.cli generate-config --output config.yaml
+uv sync --locked
+export OPENAI_API_KEY="your-key"
+uv run python -m timeline_extraction.cli generate-config \
+    --goal comparison --provider openai --output config.yaml
 ```
 
-### 2. Run Single Model Evaluation
-
-Evaluate a single model using the new pipeline:
+Obtain [MATRES gold labels](https://github.com/qiangning/MATRES) and the corresponding TimeML documents. Corpora and credentials are not bundled. Prepare both experimental modes and save their paths:
 
 ```bash
-python -m timeline_extraction.cli model evaluate \
-    --model-name "gpt-4o-mini" \
-    --method "zero-shot" \
-    --mode "comb" \
-    --data-name "te3-platinum" \
-    --output-dir "./results/single" \
-    --config-file "config.yaml"
+uv run python -m timeline_extraction.cli prepare-data \
+    --gold-file ./data/MATRES/platinum.txt \
+    --docs-dir ./data/MATRES/raw/TBAQ-cleaned/te3-platinum \
+    --data-name te3-platinum \
+    --config-file config.yaml --output-config config.yaml
+
+uv run python -m timeline_extraction.cli research --config-file config.yaml --plan
+uv run python -m timeline_extraction.cli research --config-file config.yaml
 ```
 
-### 3. Run Batch Evaluation
+`prepare-data` consumes a six-column tab-separated gold file (`docid`, `verb1`, `verb2`, `eiid1`, `eiid2`, `relation`) and matching `.tml` documents. It writes JSON arrays despite the historical serializer name `prepare_as_jsonl`. Existing prepared files require `--overwrite` to replace. `--output-config` records absolute prepared/gold paths and selects the corpus. Without that option, use the printed paths in configuration or the standard directory layout.
 
-Evaluate multiple models and methods:
+The default research goal is `classification` (pairwise accuracy). `consistency` runs document-level temporal-graph extraction. `comparison` runs both modes under the same model/method/corpus controls. These goals evaluate LLM predictions, not the paper's entire encoder-assisted cycle-resolution workflow.
+
+## Compare providers and prompting methods
 
 ```bash
-python -m timeline_extraction.cli model batch-evaluate \
-    --model-names "gpt-4o-mini" \
-    --model-names "gpt-4o" \
-    --methods "zero-shot" \
-    --methods "few-shot" \
-    --mode "comb" \
-    --data-name "te3-platinum" \
-    --output-dir "./results/batch" \
-    --config-file "config.yaml"
+export GEMINI_API_KEY="your-google-key"
+uv run python -m timeline_extraction.cli research \
+    --config-file config.yaml --goal comparison \
+    --provider openai --provider google \
+    --method zero-shot --method few-shot
 ```
 
-### 4. Demo Pipeline
+Use `google` as the provider name for Gemini. Other provider names are `together`, `groq`, and `huggingface`. Set `TOGETHER_API_KEY`, `GROQ_API_KEY`, or `HF_TOKEN` as needed. `GOOGLE_API_KEY` is also supported. Model defaults and official provider references are listed in the [README](../README.md#supported-llm-providers).
 
-Run a demonstration of the new elegant pipeline:
+Override a model ID without changing code:
 
 ```bash
-python -m timeline_extraction.cli demo-pipeline \
-    --model-names "gpt-4o-mini" \
-    --methods "zero-shot" \
-    --methods "few-shot" \
-    --mode "comb" \
-    --data-name "te3-platinum" \
-    --output-dir "./results/demo"
+uv run python -m timeline_extraction.cli research \
+    --config-file config.yaml --goal classification \
+    --provider openai --model-name gpt-6.1-sol --plan
 ```
 
-### 5. Analyze Data
+A model override requires exactly one provider. Provider routing is explicit, so a model such as `openai/gpt-oss-20b` can correctly run on Groq rather than being mistaken for an OpenAI or local model.
 
-Analyze dataset characteristics:
-
-```bash
-python -m timeline_extraction.cli analyze-data \
-    --data-path "./data/te3-platinum.json" \
-    --output "./analysis_results.json"
-```
-
-## 📋 Command Reference
-
-### Main Commands
-
-- `model evaluate`: Run single model evaluation
-- `model batch-evaluate`: Run batch evaluations across multiple models
-- `demo-pipeline`: Demonstrate the new elegant pipeline
-- `generate-config`: Generate default configuration file
-- `analyze-data`: Analyze dataset characteristics
-
-### Common Options
-
-- `--model-name`: Model to use (e.g., "gpt-4o-mini", "gemini-1.5-pro")
-- `--model-names`: Multiple model names (for batch operations)
-- `--method`: Evaluation method ("zero-shot" or "few-shot")
-- `--methods`: Multiple evaluation methods (for batch operations)
-- `--mode`: Evaluation mode ("pair", "multi", or "comb")
-- `--data-name`: Dataset name ("te3-platinum", "timebank", "aquaint")
-- `--use-vague/--no-use-vague`: Include VAGUE relations (default: True)
-- `--parser-type`: Parser type ("json" or "label", default: "json")
-- `--overwrite/--no-overwrite`: Overwrite existing results (default: False)
-- `--skip-model-eval/--no-skip-model-eval`: Skip model evaluation (default: False)
-- `--full-context/--no-full-context`: Use full context (default: True)
-- `--output-dir`: Output directory for results
-- `--config-file`: Configuration file path
-- `--gpu-device`: GPU device to use (default: 0)
-- `--verbose/-v`: Enable verbose logging
-- `--log-level`: Set logging level (DEBUG, INFO, WARNING, ERROR)
-
-## 🔧 Configuration
-
-### Configuration File Structure
+## Configuration controls
 
 ```yaml
+research:
+  goal: comparison
+  providers: [openai, google]
+  methods: [zero-shot, few-shot]
+  dataset: custom
 models:
   openai:
-    api_key: "your-openai-key"
-    default_model: "gpt-4o-mini"
-    max_tokens: 2000
+    default_model: gpt-6-luna
+    api_key: null
+    max_tokens: 8192
     temperature: 0.0
-  
+    n_trails: 5
   google:
-    api_key: "your-google-key"
-    default_model: "gemini-1.5-pro"
-
+    default_model: gemini-3.8-flash
+    api_key: null
+    max_tokens: 8192
+    temperature: 0.0
+    n_trails: 5
 evaluation:
-  default_method: "zero-shot"
-  default_mode: "comb"
   use_vague: true
-  parser_type: "json"
   overwrite: false
-
+  skip_model_eval: false
 data:
-  data_path: "./data"
-  results_path: "./results"
-  cache_path: "./cache"
+  data_path: ./data
+  results_path: ./results
+  datasets:
+    custom:
+      gold_file: ./corpus/gold.tsv
+      prepared_files:
+        pair: ./corpus/pair.json
+        multi: ./corpus/multi.json
 ```
 
-### Environment Variables
+Paths supplied in YAML are relative to the working directory unless absolute. Without overrides, the standard paths are:
 
-Set API keys via environment variables:
+- Gold: `data/MATRES/platinum.txt`, `timebank.txt`, or `aquaint.txt`.
+- Prepared: `data/TRC/raw_text/{pair,multi}_<dataset>_text_w_relations_prepared.json`.
+- Comb inputs: `data/TRC/raw_text/comb_<dataset>_{full_context,minimal_context}_text_w_relations_prepared.json`.
+
+A `prepared_file` override can select one input for a single mode; use `prepared_files` for comparisons. Local models default to CPU; configure `models.huggingface.device` as `cuda:0` or `mps` when available.
+
+`n_trails` controls independent generations and strict-majority voting. Invalid or conflicting predictions abstain. Reasoning tokens consume the output budget; increase `max_tokens` if the provider returns an incomplete response. OpenAI reasoning models omit unsupported `temperature`. Provider refusals/truncation fail the experiment rather than becoming predictions.
+
+A global `--config` file is merged with the command's `--config-file`; command-specific configuration overrides matching nested settings, and explicit CLI controls take precedence. Plans and metadata exclude API keys.
+
+## Opt-in experiment tracing
+
+Install the SDKs with `uv sync --extra tracking`, and keep `--extra tracking` on enabled `uv run` invocations so optional dependencies remain selected. All tracking controls belong before the subcommand:
 
 ```bash
-export OPENAI_API_KEY="your-openai-key"
-export GOOGLE_API_KEY="your-google-key"
+export LANGSMITH_API_KEY="your-langsmith-key"
+export LANGFUSE_PUBLIC_KEY="your-langfuse-public-key"
+export LANGFUSE_SECRET_KEY="your-langfuse-secret-key"
+
+# CLI-selected backend; use langsmith or langfuse for only one service.
+uv run --extra tracking python -m timeline_extraction.cli --tracking both \
+    --langsmith-project timeline-extraction research --config-file config.yaml
+
+# Environment-selected backend, with an explicit CLI override to disable it.
+export TIMELINE_TRACKING=langsmith
+uv run --extra tracking python -m timeline_extraction.cli research --config-file config.yaml
+uv run python -m timeline_extraction.cli --tracking none research --config-file config.yaml
 ```
 
-## 📊 Output Structure
+`--tracking` accepts `none` (default), `langsmith`, `langfuse`, or `both`; credentials alone do not enable tracing. CLI values override environment variables. Root options `--langsmith-api-key`, `--langsmith-project` (default `timeline-extraction`), `--langsmith-endpoint`, `--langfuse-public-key`, `--langfuse-secret-key`, and `--langfuse-base-url` map respectively to `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`, `LANGSMITH_ENDPOINT`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL`. Omitted endpoints use SDK defaults.
 
-The CLI generates the following output structure:
+Use environment variables for secrets rather than command history. Credentials are excluded from configuration, plans, and artifacts. Enabled tracing sends experiment settings, metrics, artifact paths, failures, and child generation prompts/responses with aggregate token usage to the selected services; corpus text may therefore leave your machine. Cached generations are not resent as fresh requests. Traces flush after each experiment. Help, `--plan`, `prepare-data`, and `generate-config` do not initialize tracing clients. See the [tracking reference](../README.md#optional-experiment-tracing) for the complete option table.
 
-```
-results/
-├── final_metrics/
-│   ├── zero-shot/
-│   │   └── comb-te3-platinum-gpt-4o-mini-zero-shot-w_vague-completion-results.csv
-│   └── few-shot/
-│       └── comb-te3-platinum-gpt-4o-mini-few-shot-w_vague-completion-results.csv
-├── batch_summary.csv
-└── demo_summary.csv
-```
+Backend references: [LangSmith custom instrumentation](https://docs.langchain.com/langsmith/annotate-code) and [Langfuse SDK overview](https://langfuse.com/docs/observability/sdk/overview). The supported Langfuse SDK 5 requires Langfuse v4 for self-hosted targets; use a compatible server when configuring `LANGFUSE_BASE_URL`.
 
-## 🎯 Advanced Usage
-
-### Custom Configuration
-
-Create a custom configuration file:
-
-```yaml
-models:
-  openai:
-    api_key: "your-key"
-    default_model: "gpt-4o"
-    max_tokens: 4000
-    temperature: 0.1
-
-evaluation:
-  default_method: "few-shot"
-  default_mode: "multi"
-  use_vague: false
-  parser_type: "json"
-  overwrite: true
-
-data:
-  data_path: "/path/to/your/data"
-  results_path: "/path/to/results"
-```
-
-### Verbose Logging
-
-Enable verbose logging for debugging:
+## Explicit single and batch evaluation
 
 ```bash
-python -m timeline_extraction.cli --verbose model evaluate \
-    --model-name "gpt-4o-mini" \
-    --method "zero-shot" \
-    --mode "comb" \
-    --data-name "te3-platinum"
+uv run python -m timeline_extraction.cli model evaluate \
+    --provider openai --model-name gpt-6-luna \
+    --method zero-shot --mode pair --data-name te3-platinum \
+    --config-file config.yaml
+
+uv run python -m timeline_extraction.cli model batch-evaluate \
+    --provider openai \
+    --model-names gpt-6-luna --model-names gpt-6.1-sol \
+    --methods zero-shot --methods few-shot \
+    --mode multi --data-name te3-platinum --config-file config.yaml
 ```
 
-### Multiple GPU Support
+Pair/comb modes infer label parsing; multi mode infers JSON/DOT relation parsing. `--parser-type` selects an explicit alternate. `--full-context/--minimal-context` selects the comb input variant. `--use-vague/--no-use-vague`, `--overwrite/--no-overwrite`, and `--output-dir` override single/batch evaluation controls.
 
-Use different GPU devices:
+`demo-pipeline` is a real paid batch evaluation against your prepared corpus, not an offline demonstration.
+
+## Outputs and resume
+
+Each experiment writes `responses.jsonl`, `checkpoint.jsonl`, `parsed.csv`, `results.csv`, `metrics.csv`, and `metrics.json` beneath:
+
+```text
+results/<provider>/<model>/<mode>/<context>/<dataset>/<method>/<fingerprint>/
+```
+
+The fingerprint includes experimental/generation settings and prepared/gold contents. API keys are excluded, so credential rotation does not invalidate a cache. Re-running identical inputs resumes completed trials. Changing corpus contents or model settings selects separate artifacts. Pre-upgrade artifacts are not reused automatically.
+
+`research_summary.csv` identifies provider, model, goal, mode, method, success/error, and artifact paths. Metrics report full-gold accuracy, coverage, per-relation precision/recall/F1, macro/weighted/micro F1, and documents containing temporal cycles. Equality components are contracted before consistency checks. Missing predictions lower accuracy and coverage rather than disappearing from evaluation.
+
+Re-evaluate saved responses without provider credentials:
 
 ```bash
-python -m timeline_extraction.cli model batch-evaluate \
-    --model-names "gpt-4o-mini" \
-    --model-names "gpt-4o" \
-    --methods "zero-shot" \
-    --methods "few-shot" \
-    --gpu-device 1 \
-    --mode "comb" \
-    --data-name "te3-platinum"
+uv run python -m timeline_extraction.cli research \
+    --config-file config.yaml --skip-model-eval
 ```
 
-## 🔍 Troubleshooting
+Keep the same inputs, provider/model settings, goal, and methods so the cached response paths match. Missing inputs are checked before the first research request. Failures produce a nonzero exit code and recorded error.
 
-### Common Issues
-
-1. **API Key Not Found**: Ensure API keys are set in environment variables or config file
-2. **Model Not Found**: Check model name spelling and availability
-3. **Data Path Not Found**: Verify data directory structure
-4. **GPU Memory Issues**: Reduce batch size or use smaller models
-
-### Debug Mode
-
-Enable debug logging:
+## Data analysis and checks
 
 ```bash
-python -m timeline_extraction.cli --log-level DEBUG model evaluate \
-    --model-name "gpt-4o-mini" \
-    --method "zero-shot" \
-    --mode "comb" \
-    --data-name "te3-platinum"
+uv run python -m timeline_extraction.cli analyze-data \
+    --data-path ./data/MATRES/platinum.txt --output analysis.json
+uv run pytest --override-ini addopts='' -q
 ```
 
-## 📈 Performance Tips
-
-1. **Use Batch Evaluation**: More efficient for multiple models/methods
-2. **Skip Model Eval**: Use `--skip-model-eval` to process existing results
-3. **GPU Memory**: Monitor GPU usage and adjust batch sizes
-4. **Configuration**: Use config files for consistent settings
-
-## 🔄 Migration from Old CLI
-
-The new CLI maintains backward compatibility while providing enhanced features:
-
-- All existing command-line options work
-- New pipeline architecture provides better error handling
-- Enhanced logging and progress tracking
-- Improved configuration management
-- Better resource cleanup
-
-## 📚 Examples
-
-### Complete Workflow
-
-```bash
-# 1. Generate config
-python -m timeline_extraction.cli generate-config --output my_config.yaml
-
-# 2. Edit config file with your API keys
-# 3. Run batch evaluation
-python -m timeline_extraction.cli model batch-evaluate \
-    --model-names "gpt-4o-mini" \
-    --model-names "gpt-4o" \
-    --methods "zero-shot" \
-    --methods "few-shot" \
-    --mode "comb" \
-    --data-name "te3-platinum" \
-    --output-dir "./results/experiment_1" \
-    --config-file "my_config.yaml"
-
-# 4. Check results
-ls -la ./results/experiment_1/
-```
-
-### Quick Demo
-
-```bash
-# Run a quick demonstration
-python -m timeline_extraction.cli demo-pipeline \
-    --model-names "gpt-4o-mini" \
-    --methods "zero-shot" \
-    --mode "comb" \
-    --data-name "te3-platinum" \
-    --output-dir "./results/quick_demo"
-```
+Use `uv run python -m timeline_extraction.cli --verbose research ...` for debug logging. For programmatic goal selection, see [elegant_pipeline_usage.py](elegant_pipeline_usage.py).

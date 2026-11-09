@@ -1,5 +1,7 @@
 """Tests for parser classes."""
 
+import pytest
+
 from timeline_extraction.models.LLModel import (
     LabelParser,
     JsonParser,
@@ -81,8 +83,6 @@ class TestJsonParser:
         result = self.parser(response)
 
         assert len(result) == 1
-        assert result[0]["event1"] == 1
-        assert result[0]["event2"] == 2
         assert result[0]["relation"] == "BEFORE"
 
     def test_parse_json_string(self):
@@ -93,8 +93,6 @@ class TestJsonParser:
         result = self.parser(response)
 
         assert len(result) == 1
-        assert result[0]["event1"] == 1
-        assert result[0]["event2"] == 2
         assert result[0]["relation"] == "AFTER"
 
     def test_parse_invalid_json(self):
@@ -103,6 +101,39 @@ class TestJsonParser:
         result = self.parser(response)
 
         assert result == []
+
+    @pytest.mark.parametrize("response", [{"response": []}, {"content": "[]"}, {"response": None}])
+    def test_empty_response(self, response):
+        assert self.parser(response) == []
+
+    @pytest.mark.parametrize("relation, expected", [
+        ("BEFORE", "AFTER"), ("AFTER", "BEFORE"), ("EQUAL", "EQUAL"), ("VAGUE", "VAGUE"),
+    ])
+    def test_reversed_pair_preserves_temporal_meaning(self, relation, expected):
+        result = self.parser({"response": [
+            {"event1": "EVENT12", "event2": "EVENT2", "relation": relation}
+        ]})
+        assert result == [{"event1": "ei2", "event2": "ei12", "relation": expected}]
+
+    def test_dot_graph_and_json_have_identical_semantics(self):
+        dot = {"content": 'digraph { e12 -> e2 [label="before"]; }'}
+        structured = {"response": [{"event1": 12, "event2": "ei2", "relation": "before"}]}
+        assert self.parser(dot) == self.parser(structured)
+
+    def test_fenced_json_preserves_justification(self):
+        result = self.parser({"content": '```json\n[{"event1":1,"event2":2,"relation":"BEFORE","justification":"earlier"}]\n```'})
+        assert result[0]["relation"] == "BEFORE"
+        assert result[0]["justification"] == "earlier"
+
+    def test_invalid_records_do_not_discard_valid_relations(self):
+        result = self.parser({"response": [
+            {}, None,
+            {"event1": "bad", "event2": "ei2", "relation": "BEFORE"},
+            {"event1": "ei1", "event2": "ei1", "relation": "BEFORE"},
+            {"event1": "ei1", "event2": 2, "relation": "BEFORE"},
+            {"event1": 1, "event2": "ei2", "relation": "before"},
+        ]})
+        assert result == [{"event1": "ei1", "event2": "ei2", "relation": "BEFORE"}]
 
 
 class TestNoParser:

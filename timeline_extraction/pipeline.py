@@ -7,9 +7,11 @@ using Large Language Models with support for multiple models and evaluation meth
 import os
 import gc
 import logging
+import hashlib
+import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union, Tuple
-from dataclasses import dataclass, field
+from typing import List, Dict, Optional
+from dataclasses import dataclass, field, replace, asdict
 from datetime import datetime
 import json
 
@@ -23,15 +25,12 @@ from timeline_extraction.metrics import summary_results
 from timeline_extraction.models.LLModel import LLModel, LabelParser, JsonParser
 from timeline_extraction.prompts.Prompt import Prompt, PairwisePrompt, MultiEvents
 from timeline_extraction.config import ConfigManager, ModelConfig, EvaluationConfig, ExperimentConfig as ConfigExperimentConfig
-from timeline_extraction.exceptions import ModelError, DataError, EvaluationError
+from timeline_extraction.exceptions import ModelError, DataError
+from timeline_extraction.tracking import ExperimentTracker, TrackingConfig
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Default paths
-DEFAULT_DATA_PATH = Path("./data")
-DEFAULT_MATRES_PATH = DEFAULT_DATA_PATH / "MATRES"
-DEFAULT_TRC_PATH = DEFAULT_DATA_PATH / "TRC"
 
 
 @dataclass
@@ -46,7 +45,7 @@ class PipelineExperimentConfig:
     
     # Evaluation settings (reuse from EvaluationConfig)
     use_vague: bool = True
-    parser_type: str = "json"  # json, label
+    parser_type: Optional[str] = None  # Inferred from mode unless explicitly selected
     overwrite: bool = False
     skip_model_eval: bool = False
     
@@ -55,7 +54,8 @@ class PipelineExperimentConfig:
     suffix_path: str = "completion"
     prompt_params: List[str] = field(default_factory=lambda: ["text", "relations"])
     gpu_device: int = 0
-    output_dir: str = "./results"
+    output_dir: Optional[str] = None
+    research_goal: Optional[str] = None
     
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -63,6 +63,8 @@ class PipelineExperimentConfig:
             raise ValueError(f"Invalid method: {self.method}")
         if self.mode not in ["pair", "multi", "comb"]:
             raise ValueError(f"Invalid mode: {self.mode}")
+        if self.parser_type is None:
+            self.parser_type = "json" if self.mode == "multi" else "label"
         if self.parser_type not in ["json", "label"]:
             raise ValueError(f"Invalid parser_type: {self.parser_type}")
     
@@ -82,7 +84,7 @@ class PipelineExperimentConfig:
         return ConfigExperimentConfig(
             name=f"{self.model_name}_{self.method}_{self.mode}",
             description=f"Pipeline experiment: {self.model_name} - {self.method} - {self.mode}",
-            output_dir=self.output_dir
+            output_dir=self.output_dir or "./results"
         )
 
 
@@ -98,6 +100,9 @@ class ExperimentResult:
     execution_time: Optional[float] = None
     model_name: Optional[str] = None
     method: Optional[str] = None
+    provider: Optional[str] = None
+    mode: Optional[str] = None
+    research_goal: Optional[str] = None
 
 
 class ModelFactory:
@@ -124,34 +129,48 @@ class ModelFactory:
         Raises:
             ModelError: If model creation fails
         """
+        kwargs = {
+            "model_name": model_name,
+            "api_key": config.api_key,
+            "max_tokens": config.max_tokens,
+            "temperature": config.temperature,
+            "n_trails": config.n_trails,
+            "parser": parser_type,
+        }
+        if config.reasoning_effort not in {None, "default"}:
+            from timeline_extraction.models._reasoning import reasoning_options
+            reasoning_options(config.provider, model_name, config.reasoning_effort)
+            kwargs["reasoning_effort"] = config.reasoning_effort
         try:
-            if "gpt" in model_name.lower():
+            if config.provider in {"antigravity", "codex", "claude"}:
+                if config.provider == "antigravity":
+                    from timeline_extraction.models.antigravity import Antigravity
+                    adapter = Antigravity
+                elif config.provider == "codex":
+                    from timeline_extraction.models.codex import Codex
+                    adapter = Codex
+                else:
+                    from timeline_extraction.models.claude import Claude
+                    adapter = Claude
+                return adapter(**kwargs, cli_timeout=config.cli_timeout)
+            if config.provider == "openai":
                 from timeline_extraction.models.OpenAIClient import OpenAIClient
-                return OpenAIClient(
-                    model_name=model_name,
-                    use_formate=False,
-                    parser=parser_type,
-                    use_dot_graph=(mode == "multi"),
-                )
-            elif "gemini" in model_name.lower():
+                return OpenAIClient(**kwargs, base_url=config.base_url)
+            if config.provider == "google":
                 from timeline_extraction.models.gemini import Gemini
-                return Gemini(model_name=model_name, n_trails=5)
-            elif "llama" in model_name.lower() and "groq" in model_name.lower():
+                return Gemini(**kwargs)
+            if config.provider == "groq":
                 from timeline_extraction.models.llama3 import GroqModel
-                return GroqModel(model_name=model_name)
-            elif "meta-llama" in model_name.lower() or "mistralai" in model_name.lower():
+                return GroqModel(**kwargs)
+            if config.provider == "together":
                 from timeline_extraction.models.TogetherAIClient import TogetherAIClient
-                return TogetherAIClient(model_name=model_name)
-            else:
-                # Default to HuggingFace for other models
+                return TogetherAIClient(**kwargs)
+            if config.provider == "huggingface":
                 from timeline_extraction.models.HuggingFaceClient import HuggingfaceClient
-                return HuggingfaceClient(
-                    model_name=model_name, 
-                    device=config.device, 
-                    parser=parser_type
-                )
-        except Exception as e:
-            raise ModelError(f"Failed to create model {model_name}: {str(e)}")
+                return HuggingfaceClient(**kwargs, device=config.device, cache_dir=config.cache_dir)
+            raise ValueError(f"Unsupported provider: {config.provider}")
+        except Exception as error:
+            raise ModelError(f"Failed to create {config.provider} model {model_name}: {error}") from error
 
 
 class PromptFactory:
@@ -217,7 +236,8 @@ class TimelineExtractionPipeline:
         self, 
         config_manager: Optional[ConfigManager] = None,
         data_path: Optional[Path] = None,
-        trc_path: Optional[Path] = None
+        trc_path: Optional[Path] = None,
+        tracking_config: Optional[TrackingConfig] = None,
     ):
         """Initialize the pipeline.
         
@@ -225,55 +245,54 @@ class TimelineExtractionPipeline:
             config_manager: Configuration manager instance
             data_path: Path to data directory
             trc_path: Path to TRC directory
+            tracking_config: Explicit tracing settings; otherwise read from the environment
         """
         self.config_manager = config_manager or ConfigManager()
-        self.data_path = data_path or DEFAULT_DATA_PATH
-        self.trc_path = trc_path or DEFAULT_TRC_PATH
+        self.data_path = Path(data_path or self.config_manager.data_config.data_path)
+        self.trc_path = Path(trc_path) if trc_path else self.data_path / "TRC"
         self.matres_path = self.data_path / "MATRES"
-        
-        # Ensure directories exist
-        self._ensure_directories()
-    
-    def _ensure_directories(self) -> None:
-        """Ensure all required directories exist."""
-        directories = [
-            self.trc_path / "llm_response",
-            self.trc_path / "parsed_responses", 
-            self.trc_path / "results",
-            self.trc_path / "llm_raw_response",
-            self.trc_path / "final_metrics"
-        ]
-        
-        for directory in directories:
-            directory.mkdir(parents=True, exist_ok=True)
+        self.tracking_config = tracking_config or TrackingConfig.from_env()
+        self._tracker = None
     
     def _get_file_paths(
-        self, 
-        config: PipelineExperimentConfig
+        self,
+        config: PipelineExperimentConfig,
+        model_config: Optional[ModelConfig] = None,
     ) -> Dict[str, Path]:
-        """Generate file paths for the experiment.
-        
-        Args:
-            config: Experiment configuration
-            
-        Returns:
-            Dictionary of file paths
-        """
-        suffix_name = generate_suffix_name(
-            config.model_name, 
-            config.method, 
-            config.suffix_path, 
-            config.use_vague
+        """Isolate cached artifacts by provider, data, context, and generation settings."""
+        model_config = model_config or self.config_manager.resolve_model_config(config.model_name)
+        raw_text = self._get_raw_text_path(config)
+        gold_path = self._get_labeled_data_path(config)
+        settings = {
+            "experiment": {
+                key: value for key, value in asdict(config).items()
+                if key not in {"overwrite", "skip_model_eval", "output_dir"}
+            },
+            "model": {
+                key: value for key, value in asdict(model_config).items()
+                if key != "api_key"
+            },
+            "inputs": {
+                str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+                for path in (raw_text, gold_path)
+            },
+        }
+        fingerprint = hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:20]
+        model_slug = re.sub(r"[^A-Za-z0-9._-]+", "_", config.model_name)
+        dataset_slug = re.sub(r"[^A-Za-z0-9._-]+", "_", config.data_name)
+        root = Path(config.output_dir or self.config_manager.data_config.results_path)
+        artifact_dir = (
+            root / model_config.provider / model_slug / config.mode
+            / ("full_context" if config.full_context else "minimal_context")
+            / dataset_slug / config.method / fingerprint
         )
-        
-        base_name = f"{config.mode}-{config.data_name}-{suffix_name}"
-        
         return {
-            "llm_response": self.trc_path / "llm_response" / config.method / f"{base_name}.jsonl",
-            "parsed_response": self.trc_path / "parsed_responses" / config.method / f"{base_name}-results.csv",
-            "results": self.trc_path / "results" / config.method / f"{base_name}-results.csv",
-            "checkpoint": self.trc_path / "llm_raw_response" / config.method / f"{base_name}.jsonl",
-            "raw_text": self._get_raw_text_path(config)
+            "llm_response": artifact_dir / "responses.jsonl",
+            "parsed_response": artifact_dir / "parsed.csv",
+            "results": artifact_dir / "results.csv",
+            "checkpoint": artifact_dir / "checkpoint.jsonl",
+            "metrics": artifact_dir / "metrics.csv",
+            "raw_text": raw_text,
         }
     
     def _get_raw_text_path(self, config: PipelineExperimentConfig) -> Path:
@@ -285,6 +304,11 @@ class TimelineExtractionPipeline:
         Returns:
             Path to raw text file
         """
+        datasets = self.config_manager.data_config.datasets or {}
+        dataset = datasets.get(config.data_name, {})
+        prepared_file = (dataset.get("prepared_files") or {}).get(config.mode) or dataset.get("prepared_file")
+        if prepared_file:
+            return Path(prepared_file)
         if config.mode == "comb":
             context_ref = "full_context" if config.full_context else "minimal_context"
             filename = f"{config.mode}_{config.data_name.lower()}_{context_ref}_text_w_relations_prepared.json"
@@ -302,19 +326,61 @@ class TimelineExtractionPipeline:
         Returns:
             Path to labeled data file
         """
+        dataset = (self.config_manager.data_config.datasets or {}).get(config.data_name, {})
+        if dataset.get("gold_file"):
+            return Path(dataset["gold_file"])
         dataset_mapping = {
             "te3-platinum": "platinum.txt",
             "timebank": "timebank.txt", 
             "aquaint": "aquaint.txt"
         }
         
-        filename = dataset_mapping.get(config.data_name, "platinum.txt")
+        if config.data_name not in dataset_mapping:
+            raise DataError(f"Dataset {config.data_name!r} requires a gold_file override")
+        filename = dataset_mapping[config.data_name]
         return self.matres_path / filename
     
     def run_experiment(
+        self,
+        config: PipelineExperimentConfig,
+        model_config: Optional[ModelConfig] = None,
+    ) -> ExperimentResult:
+        """Run locally, optionally exporting an experiment trace and its generations."""
+        if self.tracking_config.backend == "none":
+            return self._run_experiment(config, model_config)
+        if self._tracker is None:
+            self._tracker = ExperimentTracker(self.tracking_config)
+        tracker = self._tracker
+        try:
+            model_config = model_config or self.config_manager.resolve_model_config(config.model_name)
+            metadata = {key: value for key, value in asdict(model_config).items() if key != "api_key"}
+            with tracker.span("timeline.experiment", asdict(config), metadata) as span:
+                result = self._run_experiment(config, model_config, tracker)
+                output = {
+                    "success": result.success,
+                    "execution_time": result.execution_time,
+                    "artifacts": {
+                        name: str(path) for name in ("results_path", "metrics_path", "metadata_path")
+                        if (path := getattr(result, name)) is not None
+                    },
+                }
+                if result.success:
+                    metrics = pd.read_csv(result.metrics_path, header=[0, 1])
+                    metrics.columns = [
+                        name if metric.startswith("Unnamed:") else f"{name}.{metric}"
+                        for name, metric in metrics.columns
+                    ]
+                    output["metrics"] = json.loads(metrics.to_json(orient="records"))
+                span.finish(output, error=result.error)
+                return result
+        finally:
+            tracker.flush()
+
+    def _run_experiment(
         self, 
         config: PipelineExperimentConfig,
-        model_config: Optional[ModelConfig] = None
+        model_config: Optional[ModelConfig] = None,
+        tracker: Optional[ExperimentTracker] = None,
     ) -> ExperimentResult:
         """Run a single experiment.
         
@@ -330,18 +396,18 @@ class TimelineExtractionPipeline:
         try:
             logger.info(f"Starting experiment: {config.model_name} - {config.method} - {config.mode}")
             
-            # Get file paths
-            paths = self._get_file_paths(config)
-            
-            # Create model and prompt
+            model_config = model_config or self.config_manager.resolve_model_config(config.model_name)
+            paths = self._get_file_paths(config, model_config)
+            for path_name, path in paths.items():
+                if path_name != "raw_text":
+                    path.parent.mkdir(parents=True, exist_ok=True)
+
             parser_type = JsonParser if config.parser_type == "json" else LabelParser
-            model = ModelFactory.create_model(
-                config.model_name, 
-                model_config or ModelConfig(name=config.model_name),
-                parser_type,
-                config.mode
-            )
-            
+            model = None
+            if not config.skip_model_eval:
+                model = ModelFactory.create_model(
+                    config.model_name, model_config, parser_type, config.mode
+                )
             prompt = PromptFactory.create_prompt(
                 config.method,
                 parser_type,
@@ -350,7 +416,7 @@ class TimelineExtractionPipeline:
             
             # Run the main pipeline
             results_path = self._run_pipeline(
-                config, model, prompt, paths
+                config, model, prompt, paths, model_config.n_trails, tracker, model_config
             )
             
             # Get summary results
@@ -360,7 +426,7 @@ class TimelineExtractionPipeline:
             
             # Create metadata
             metadata_path = self._save_metadata(
-                config, results_path, metrics_path, start_time
+                config, results_path, metrics_path, start_time, model_config
             )
             
             execution_time = (datetime.now() - start_time).total_seconds()
@@ -374,7 +440,10 @@ class TimelineExtractionPipeline:
                 metadata_path=metadata_path,
                 execution_time=execution_time,
                 model_name=config.model_name,
-                method=config.method
+                method=config.method,
+                provider=model_config.provider,
+                mode=config.mode,
+                research_goal=config.research_goal,
             )
             
         except Exception as e:
@@ -387,7 +456,10 @@ class TimelineExtractionPipeline:
                 error=error_msg,
                 execution_time=execution_time,
                 model_name=config.model_name,
-                method=config.method
+                method=config.method,
+                provider=model_config.provider if model_config else None,
+                mode=config.mode,
+                research_goal=config.research_goal,
             )
         finally:
             # Cleanup
@@ -396,9 +468,12 @@ class TimelineExtractionPipeline:
     def _run_pipeline(
         self,
         config: PipelineExperimentConfig,
-        model: LLModel,
+        model: Optional[LLModel],
         prompt: Prompt,
-        paths: Dict[str, Path]
+        paths: Dict[str, Path],
+        n_trails: int = 5,
+        tracker: Optional[ExperimentTracker] = None,
+        model_config: Optional[ModelConfig] = None,
     ) -> Path:
         """Run the main pipeline processing.
         
@@ -411,32 +486,33 @@ class TimelineExtractionPipeline:
         Returns:
             Path to results file
         """
-        # Ensure checkpoint directory exists
-        paths["checkpoint"].parent.mkdir(parents=True, exist_ok=True)
-        
-        # Generate model responses if not skipping
         if not config.skip_model_eval:
             logger.info("Generating model responses...")
-        model.generate_responses(
+            model.generate_responses(
                 text_path=paths["raw_text"],
                 results_path=paths["llm_response"],
                 prompt_params=config.prompt_params,
-            prompt_template=prompt,
+                prompt_template=prompt,
                 overwrite=config.overwrite,
                 checkpoint_results=paths["checkpoint"],
+                response_generator=(
+                    lambda prompt: tracker.generate(model, prompt, {
+                        "ls_provider": model_config.provider,
+                        "ls_model_name": config.model_name,
+                        "temperature": model_config.temperature,
+                        "max_tokens": model_config.max_tokens,
+                        "n_trails": model_config.n_trails,
+                    })
+                ) if tracker else None,
             )
-        
-        # Parse responses
+        elif not paths["llm_response"].is_file():
+            raise DataError(f"No saved responses to evaluate: {paths['llm_response']}")
+
         logger.info("Parsing model responses...")
-        self._parse_responses(config, model, prompt, paths)
-        
-        # Apply majority voting
+        self._parse_responses(config, paths)
         logger.info("Applying majority voting...")
-        min_votes = 3
         majority_vote_decision_new(
-            paths["parsed_response"], 
-            paths["results"], 
-            min_votes
+            paths["parsed_response"], paths["results"], n_trails // 2 + 1
         )
         
         return paths["results"]
@@ -444,9 +520,7 @@ class TimelineExtractionPipeline:
     def _parse_responses(
         self,
         config: PipelineExperimentConfig,
-        model: LLModel,
-        prompt: Prompt,
-        paths: Dict[str, Path]
+        paths: Dict[str, Path],
     ) -> None:
         """Parse model responses into structured format.
         
@@ -456,41 +530,42 @@ class TimelineExtractionPipeline:
             prompt: Prompt instance
             paths: File paths dictionary
         """
-        # Load results
         results_df = pd.read_json(paths["llm_response"], lines=True)
-        
-        # Parse each response
         data = []
-        for idx, row in tqdm(results_df.iterrows(), total=len(results_df), desc="Parsing responses"):
-            if isinstance(prompt, PairwisePrompt):
-                true_labels = (
-                    [row.true_label.upper()] if "true_label" in row else ["NO_TRUE_LABEL"]
-                )
-            else:
-                true_labels = ["NO_TRUE_LABEL"]
-
-            if isinstance(row.response, str):
-                p_label = row.response.upper()
-            else:
-                p_label = row.response["relation"].upper()
-
-            for true_label, (e1, e2) in zip(true_labels, row.relations):
+        for _, row in tqdm(results_df.iterrows(), total=len(results_df), desc="Parsing responses"):
+            if not isinstance(row.response, str):
+                continue
+            p_label = row.response.strip().upper()
+            for e1, e2 in row.relations:
+                # Use the same numeric orientation as JsonParser and the gold data.
+                numbers = [JsonParser._event_number(event) for event in (e1, e2)]
+                if None in numbers or numbers[0] == numbers[1]:
+                    continue
+                label = p_label
+                true_label = str(row.get("true_label", "NO_TRUE_LABEL")).upper()
+                if numbers[0] > numbers[1]:
+                    e1, e2 = e2, e1
+                    label = {"BEFORE": "AFTER", "AFTER": "BEFORE"}.get(label, label)
+                    true_label = {"BEFORE": "AFTER", "AFTER": "BEFORE"}.get(true_label, true_label)
                 data.append({
                     "docid": row.doc_id,
                     "eiid1": e1,
                     "eiid2": e2,
                     "relation": true_label,
                     "unique_id": "-".join(sorted([e1, e2])),
-                    "p_label": p_label,
+                    "p_label": label,
                     "mode": config.mode,
                     "model_name": config.model_name,
                     "iter": row.trail,
                     "prompt": row.prompt,
-                    "raw_response": row.content if "content" in row else row.response,
+                    "raw_response": row.get("content", row.response),
                 })
         
         # Save parsed responses
-        parsed_df = pd.DataFrame(data)
+        parsed_df = pd.DataFrame(data, columns=[
+            "docid", "eiid1", "eiid2", "relation", "unique_id", "p_label",
+            "mode", "model_name", "iter", "prompt", "raw_response",
+        ])
         parsed_df.to_csv(paths["parsed_response"], index=False)
     
     def _get_summary_results(
@@ -518,12 +593,7 @@ class TimelineExtractionPipeline:
 
         # Load results
         results_df = pd.read_csv(results_path)
-        results_df = pd.merge(
-            results_df,
-            gold_df[["docid", "unique_id"]],
-            how="inner",
-            on=["docid", "unique_id"],
-        ).drop_duplicates(["docid", "unique_id"])
+        results_df = results_df.drop_duplicates(["docid", "unique_id"])
 
         # Calculate summary
         df = summary_results(results_df, gold_df, config.model_name)
@@ -532,9 +602,7 @@ class TimelineExtractionPipeline:
         df["model_name"] = config.model_name
         
         # Save metrics
-        metrics_path = (
-            Path(config.output_dir) / "final_metrics" / config.method / results_path.name
-        )
+        metrics_path = paths["metrics"]
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(metrics_path, index=False)
         
@@ -545,7 +613,8 @@ class TimelineExtractionPipeline:
         config: PipelineExperimentConfig,
         results_path: Path,
         metrics_path: Path,
-        start_time: datetime
+        start_time: datetime,
+        model_config: ModelConfig,
     ) -> Path:
         """Save experiment metadata.
         
@@ -559,18 +628,9 @@ class TimelineExtractionPipeline:
             Path to metadata file
         """
         metadata = {
-            "experiment_config": {
-                "model_name": config.model_name,
-                "method": config.method,
-                "mode": config.mode,
-                "data_name": config.data_name,
-                "use_vague": config.use_vague,
-                "parser_type": config.parser_type,
-                "full_context": config.full_context,
-                "suffix_path": config.suffix_path,
-                "prompt_params": config.prompt_params,
-                "gpu_device": config.gpu_device,
-                "output_dir": config.output_dir,
+            "experiment_config": asdict(config),
+            "model_config": {
+                key: value for key, value in asdict(model_config).items() if key != "api_key"
             },
             "file_paths": {
                 "results_path": str(results_path),
@@ -599,46 +659,6 @@ class TimelineExtractionPipeline:
         gc.collect()
 
 
-# Legacy function for backward compatibility
-def main(
-    model_name: str,
-    method: str,
-    model: LLModel,
-    prompt_params: List[str],
-    raw_text_name: str,
-    data_name: str,
-    prompt: Prompt,
-    suffix_path: str = "",
-    mode: str = "multi",
-    overwrite: bool = False,
-    use_vague: bool = False,
-    skip_model_eval: bool = False,
-) -> Path:
-    """Legacy main function for backward compatibility.
-    
-    This function is deprecated. Use TimelineExtractionPipeline instead.
-    """
-    logger.warning("Using deprecated main() function. Consider using TimelineExtractionPipeline instead.")
-    
-    config = PipelineExperimentConfig(
-        model_name=model_name,
-        method=method,
-        mode=mode,
-        data_name=data_name,
-        use_vague=use_vague,
-        overwrite=overwrite,
-        skip_model_eval=skip_model_eval,
-        suffix_path=suffix_path,
-        prompt_params=prompt_params
-    )
-    
-    pipeline = TimelineExtractionPipeline()
-    result = pipeline.run_experiment(config)
-    
-    if not result.success:
-        raise PipelineError(f"Pipeline failed: {result.error}")
-    
-    return result.results_path
 
 
 class BatchExperimentRunner:
@@ -682,21 +702,7 @@ class BatchExperimentRunner:
                 logger.info(f"Running experiment {experiment_num}/{total_experiments}: {model_name} - {method}")
                 
                 # Create experiment config
-                config = PipelineExperimentConfig(
-                    model_name=model_name,
-                    method=method,
-                    mode=base_config.mode,
-                    data_name=base_config.data_name,
-                    use_vague=base_config.use_vague,
-                    parser_type=base_config.parser_type,
-                    overwrite=base_config.overwrite,
-                    skip_model_eval=base_config.skip_model_eval,
-                    full_context=base_config.full_context,
-                    suffix_path=base_config.suffix_path,
-                    prompt_params=base_config.prompt_params,
-                    gpu_device=base_config.gpu_device,
-                    output_dir=base_config.output_dir,
-                )
+                config = replace(base_config, model_name=model_name, method=method)
                 
                 # Get model config if available
                 model_config = model_configs.get(model_name) if model_configs else None
@@ -735,6 +741,9 @@ class BatchExperimentRunner:
             summary_data.append({
                 "model_name": result.model_name,
                 "method": result.method,
+                "provider": result.provider,
+                "mode": result.mode,
+                "research_goal": result.research_goal,
                 "success": result.success,
                 "execution_time": result.execution_time,
                 "error": result.error,
@@ -743,107 +752,13 @@ class BatchExperimentRunner:
             })
         
         summary_df = pd.DataFrame(summary_data)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         summary_df.to_csv(output_path, index=False)
         
         logger.info(f"Batch summary saved to {output_path}")
 
 
-# Legacy function for backward compatibility
-def get_summary_results(
-    model_name: str,
-    method: str,
-    labeled_path: Path,
-    results_path: Path,
-    suffix_path: str = "",
-    use_vague: bool = True,
-) -> pd.DataFrame:
-    """Legacy function for getting summary results.
-    
-    This function is deprecated. Use TimelineExtractionPipeline instead.
-    """
-    logger.warning("Using deprecated get_summary_results() function. Consider using TimelineExtractionPipeline instead.")
-    
-    gold_df = load_data(labeled_path)
-    if not use_vague:
-        gold_df = gold_df[gold_df["label"] != "VAGUE"]
-
-    results_df = pd.read_csv(results_path)
-    results_df = pd.merge(
-        results_df,
-        gold_df[["docid", "unique_id"]],
-        how="inner",
-        on=["docid", "unique_id"],
-    ).drop_duplicates(["docid", "unique_id"])
-
-    df = summary_results(results_df, gold_df, model_name)
-    df["method"] = method
-    df["suffix_path"] = suffix_path
-    df["model_name"] = model_name
-    return df
 
 
-def run_example_experiment():
-    """Example of how to use the new elegant pipeline."""
-    
-    # Set up GPU device
-    gpu_device = 1
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_device)
-    
-    # Configuration
-    model_names = ["gpt-4o-mini"]
-    methods = ["zero-shot", "few-shot"]
-    
-    # Base experiment configuration
-    base_config = PipelineExperimentConfig(
-        model_name="",  # Will be set per experiment
-        method="",      # Will be set per experiment
-        mode="comb",    # all possible pairs in 2-line apart context
-        data_name="te3-platinum",
-        use_vague=True,
-        parser_type="json",
-        overwrite=True,
-        skip_model_eval=False,
-        full_context=True,
-        suffix_path="completion",
-        prompt_params=["text", "relations"],
-        gpu_device=gpu_device,
-        output_dir="./results"
-    )
-    
-    # Initialize pipeline and batch runner
-    pipeline = TimelineExtractionPipeline()
-    batch_runner = BatchExperimentRunner(pipeline)
-    
-    # Run batch experiments
-    results = batch_runner.run_batch_experiments(
-        model_names=model_names,
-        methods=methods,
-        base_config=base_config
-    )
-    
-    # Save batch summary
-    summary_path = Path("./results/batch_summary.csv")
-    batch_runner.save_batch_summary(results, summary_path)
-    
-    # Print results
-    print("\n" + "="*60)
-    print("EXPERIMENT RESULTS SUMMARY")
-    print("="*60)
-    
-    for result in results:
-        status = "✓ SUCCESS" if result.success else "✗ FAILED"
-        print(f"{result.model_name} - {result.method}: {status}")
-        if result.success:
-            print(f"  Execution time: {result.execution_time:.2f}s")
-            print(f"  Results: {result.results_path}")
-            print(f"  Metrics: {result.metrics_path}")
-        else:
-            print(f"  Error: {result.error}")
-        print("-" * 40)
-    
-    print(f"\nBatch summary saved to: {summary_path}")
 
 
-if __name__ == "__main__":
-    # Run the example experiment
-    run_example_experiment()

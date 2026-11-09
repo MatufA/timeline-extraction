@@ -1,9 +1,0 @@
-pandas
-beautifulsoup4
-matplotlib
-transformers
-networkx
-lxml
-google-generativeai
-tiktoken
-scikit-learn

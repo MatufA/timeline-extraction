@@ -29,31 +29,21 @@ def calculate_temporal_metrics(
     Returns:
         Dictionary of metrics
     """
-    # Filter out VAGUE relations if not using them
-    if not use_vague:
-        filtered_pairs = [
-            (true, pred)
-            for true, pred in zip(y_true, y_pred)
-            if true != "VAGUE" and pred != "VAGUE"
-        ]
-        if filtered_pairs:
-            y_true, y_pred = zip(*filtered_pairs)
-        else:
-            return {"error": "No non-VAGUE relations found"}
-
-    # Normalize relations
-    y_true = [normalize_relation(rel) for rel in y_true]
-    y_pred = [normalize_relation(rel) for rel in y_pred]
-
-    # Validate relations
-    valid_true = [rel for rel in y_true if validate_temporal_relation(rel)]
-    valid_pred = [rel for rel in y_pred if validate_temporal_relation(rel)]
-
-    if len(valid_true) != len(y_true) or len(valid_pred) != len(y_pred):
-        logging.warning("Some relations were invalid and filtered out")
-
-    # Calculate metrics
-    return calculate_metrics(valid_true, valid_pred)
+    if len(y_true) != len(y_pred):
+        raise ValueError("True and predicted relation counts must match")
+    pairs = [
+        (normalize_relation(true), normalize_relation(pred) if isinstance(pred, str) else "NO_PREDS")
+        for true, pred in zip(y_true, y_pred)
+    ]
+    pairs = [
+        (true, pred if validate_temporal_relation(pred) else "NO_PREDS")
+        for true, pred in pairs
+        if validate_temporal_relation(true) and (use_vague or true != "VAGUE")
+    ]
+    if not pairs:
+        return {"error": "No valid gold relations found"}
+    true_labels, predicted_labels = map(list, zip(*pairs))
+    return calculate_metrics(true_labels, predicted_labels)
 
 
 def compare_implicit_relations(model_results_df: pd.DataFrame, gold_df: pd.DataFrame):
@@ -108,98 +98,50 @@ def summary_results(
     model_name: str,
     target_col: str = "label",
 ):
-    relations = gold_df.label.unique().tolist()
+    """Evaluate every gold pair; missing predictions remain explicit abstentions."""
+    gold = gold_df.copy().drop_duplicates(["docid", "unique_id"])
+    gold[target_col] = gold[target_col].apply(normalize_relation)
+    relations = sorted(gold[target_col].unique().tolist())
+    if not relations:
+        raise ValueError("No gold relations available for evaluation")
 
-    # find cycles in docs
-    cycles = get_n_graph_cycles(model_results_df, relation_key="p_label")
-    cycles_df = pd.DataFrame.from_dict(
-        cycles, orient="index", columns=["ccr"]
-    ).reset_index()
-    cycles_df.columns = ["docid", "n_cycles"]
-    model_results_with_cycles = pd.merge(
-        model_results_df, cycles_df, on=["docid"], how="left"
+    predictions = model_results_df.drop_duplicates(["docid", "unique_id"]).copy()
+    predictions["p_label"] = predictions["p_label"].fillna("NO_PREDS").astype(str).str.upper()
+    valid_labels = {"BEFORE", "AFTER", "EQUAL", "VAGUE"}
+    predictions.loc[~predictions["p_label"].isin(valid_labels), "p_label"] = "NO_PREDS"
+    cycles = get_n_graph_cycles(predictions, relation_key="p_label")
+    cycles_score = f"{sum(cycles.values())} / {gold['docid'].nunique()}"
+
+    joined = gold[["docid", "unique_id", target_col]].merge(
+        predictions[["docid", "unique_id", "p_label"]],
+        on=["docid", "unique_id"],
+        how="left",
+        validate="one_to_one",
     )
-    cycles_score = (
-        f"{int(model_results_with_cycles[['docid', 'n_cycles']].drop_duplicates()['n_cycles'].sum())} / "
-        f"{model_results_with_cycles['docid'].nunique()}"
-    )
-
-    # merge predictions with gold data and annotate NO_PREDS (no predictions for label in gold df) and
-    # NO_LABEL (no label for relation in gold df)
-    df_results = pd.merge(
-        model_results_with_cycles,
-        gold_df[["docid", "unique_id", "label"]],
-        how="outer",
-        on=[
-            "docid",
-            "unique_id",
-        ],
-    )
-    df_results["label"] = df_results.label.fillna("NO_LABEL")
-    df_results["p_label"] = df_results.p_label.fillna("NO_PREDS")
-    df_results["p_label"] = df_results["p_label"].apply(
-        lambda x: x if x in relations else "NO_PREDS"
-    )
-
-    # change non standard labels for preformance metrics
-    df_results["p_label_for_eval"] = df_results["p_label"].copy()
-    no_preds_mask = df_results.p_label == "NO_PREDS"
-    # choose randomly wrong label in case of NO_PREDS
-    df_results.loc[no_preds_mask, "p_label_for_eval"] = df_results[no_preds_mask].apply(
-        lambda row: np.choose(1, list(set(relations) - set([row.label]))),
-        axis="columns",
-    )
-
-    # joined_df = compare_implicit_relations(model_results_df, gold_df)
-
-    joined_df = pd.merge(
-        df_results,
-        gold_df[["docid", "unique_id", "label"]],
-        how="right",
-        on=[
-            "docid",
-            "unique_id",
-        ],
-        suffixes=("_old", None),
-    )
-
-    # calculate covarage
-    labels_mask = joined_df.p_label != "NO_PREDS"
-    coverage_score = labels_mask.sum() / gold_df.shape[0]
-
-    # calculate precision, recall, f1 for each label
+    joined["p_label"] = joined["p_label"].fillna("NO_PREDS")
+    coverage = (joined["p_label"] != "NO_PREDS").mean()
     precision, recall, f1, support = precision_recall_fscore_support(
-        joined_df.label,
-        joined_df.p_label_for_eval,
-        average=None,
-        labels=relations,
-        zero_division=0,
+        joined[target_col], joined["p_label"], labels=relations,
+        average=None, zero_division=0,
+    )
+    _, _, micro_f1, _ = precision_recall_fscore_support(
+        joined[target_col], joined["p_label"], average="micro", zero_division=0,
     )
     metrics_data = np.array(list(zip(precision, recall, f1, support)))
-
-    # calculate micro-f1 score
-    _, _, micro_f1_score, _ = precision_recall_fscore_support(
-        joined_df.label,
-        joined_df.p_label_for_eval,
-        average="micro",
-        labels=relations,
-        zero_division=0,
-    )
-
-    # create final metrics df
-    df = pd.DataFrame(
+    result = pd.DataFrame(
         metrics_data.flatten()[np.newaxis, :],
         columns=pd.MultiIndex.from_product(
             [relations, ["precision", "recall", "f1", "support"]],
             names=["relation", "metric"],
         ),
     )
-
-    df["micro-f1"] = micro_f1_score
-    df["macro-f1"] = (f1 * support / support.sum()).sum()
-    df["cycles"] = cycles_score
-    df["coverage"] = coverage_score
-    return df
+    result["accuracy"] = (joined[target_col] == joined["p_label"]).mean()
+    result["micro-f1"] = micro_f1
+    result["macro-f1"] = f1.mean()
+    result["weighted-f1"] = (f1 * support / support.sum()).sum()
+    result["cycles"] = cycles_score
+    result["coverage"] = coverage
+    return result
 
 
 def relation_table(gold_df, preds_df, model_name, target_col="relation"):
@@ -378,7 +320,10 @@ def correct_consistency_rate(df_predicted: pd.DataFrame, df_true: pd.DataFrame) 
 def get_n_graph_cycles(df: pd.DataFrame, relation_key: str) -> dict:
     return {
         k: len(v)
-        for k, v in Graph(use_equal=True, relation_key=relation_key)
+        for k, v in Graph(
+            use_equal=True, supported_relation=("AFTER", "BEFORE", "EQUAL"),
+            relation_key=relation_key,
+        )
         .find_cycles(df)
         .items()
     }

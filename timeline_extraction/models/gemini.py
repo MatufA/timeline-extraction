@@ -1,167 +1,113 @@
-import json
 import os
-from pathlib import Path
-from time import sleep
-from typing import List
+from typing import Optional, Type
 
-import pandas as pd
-from tqdm import tqdm, trange
+from google import genai
+from google.genai import types
 
-import google.generativeai as genai
-
-from timeline_extraction.data.postprocessing import prepare_df_from_response
-from timeline_extraction.data.preprocessing import Doc
-from timeline_extraction.models.LLModel import LLModel
+from timeline_extraction.models.LLModel import LLModel, LabelParser, Parser
+from timeline_extraction.models._responses import chat_messages
+from timeline_extraction.models._reasoning import reasoning_options
 
 
 class Gemini(LLModel):
-
     def __init__(
         self,
         model_name: str,
-        max_output_tokens: int = 2000,
-        stop_sequences: List[str] = None,
+        api_key: Optional[str] = None,
+        max_tokens: int = 2000,
+        temperature: float = 0.0,
         n_trails: int = 5,
+        parser: Type[Parser] = LabelParser,
+        *,
+        reasoning_effort: Optional[str] = None,
     ):
-        if stop_sequences is None:
-            stop_sequences = ["DONE!", "\n\n"]
-
-        model = self._initial_google_genai(
-            model_name,
-            max_output_tokens=max_output_tokens,
-            stop_sequences=stop_sequences,
+        self.model_name = model_name
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.reasoning_options = reasoning_options("google", model_name, reasoning_effort)
+        super().__init__(
+            genai.Client(
+                api_key=api_key
+                or os.environ.get("GOOGLE_API_KEY")
+                or os.environ.get("GEMINI_API_KEY")
+            ),
+            each_trail=False,
+            each_doc=True,
+            n_trails=n_trails,
+            parser=parser,
         )
-        each_trail = model.model_name.endswith("pro")
-        each_doc = model.model_name.endswith("flash")
-        super().__init__(model, each_trail, each_doc, n_trails)
 
     @staticmethod
-    def _initial_google_genai(
-        model_name: str, max_output_tokens: int, stop_sequences: list
-    ) -> genai.GenerativeModel:
-        genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-        return genai.GenerativeModel(
-            model_name,
-            generation_config=genai.GenerationConfig(
-                max_output_tokens=max_output_tokens, stop_sequences=stop_sequences
-            ),
-        )
+    def _contents(prompt):
+        contents = []
+        instructions = []
+        for message in chat_messages(prompt):
+            role = message["role"]
+            text = message["content"]
+            if not isinstance(text, str):
+                raise ValueError("Gemini text prompts require string message content")
+            if role in {"system", "developer"}:
+                instructions.append(text)
+            elif role in {"user", "assistant"}:
+                contents.append(
+                    types.Content(
+                        role="model" if role == "assistant" else "user",
+                        parts=[types.Part.from_text(text=text)],
+                    )
+                )
+            else:
+                raise ValueError(f"Unsupported Gemini message role: {role}")
+        return contents, "\n\n".join(instructions) or None
 
     def generate_response(self, prompt):
-        return self.model.generate_content(prompt)
-
-    def prepare_response(self, response):
-        return {
-            "response": response.text,
-            "total_token_count": response.usage_metadata.total_token_count,
-            "prompt_token_count": response.usage_metadata.prompt_token_count,
-            "candidates_token_count": response.usage_metadata.candidates_token_count,
-        }
-
-
-def initial_google_genai(
-    model_name: str, max_output_tokens: int, stop_sequences: list
-) -> genai.GenerativeModel:
-    genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-    return genai.GenerativeModel(
-        model_name,
-        generation_config=genai.GenerationConfig(
-            max_output_tokens=max_output_tokens, stop_sequences=stop_sequences
-        ),
-    )
-
-
-def generate_responses(
-    model: genai.GenerativeModel,
-    platinum_text_prepared_path: Path,
-    prompt_path: Path,
-    results_path: Path,
-):
-    records = json.load(platinum_text_prepared_path.open("r"))
-    prompt_template = prompt_path.open("r").read()
-
-    if results_path.exists():
-        records_partial_df = pd.read_json(results_path, lines=True)
-        doc_iter = records_partial_df.groupby("doc_id")["n_tokens"].count().to_dict()
-        records = (record for record in records if record["doc_id"] not in doc_iter)
-
-    with results_path.open("a") as file:
-        for record in tqdm(records, desc="Platinum Text evaluation", position=0):
-            for trail in trange(
-                5,
-                desc=f'Processing record: {record["doc_id"]}',
-                position=1,
-                leave=False,
-            ):
-                prompt = prompt_template.format(text=record["text"])
-                response = model.generate_content(prompt)
-
-                record["response"] = response.text
-                record["total_token_count"] = response.usage_metadata.total_token_count
-                record["prompt_token_count"] = (
-                    response.usage_metadata.prompt_token_count
-                )
-                record["candidates_token_count"] = (
-                    response.usage_metadata.candidates_token_count
-                )
-                record["trail"] = trail
-                json_line = json.dumps(record)
-                file.write(json_line + "\n")
-
-                sleep(30) if model.model_name.endswith("pro") else None
-
-            sleep(10) if model.model_name.endswith("flash") else None
-
-
-if __name__ == "__main__":
-    model_name = "gemini-1.5-pro"
-    # model_name = 'gemini-1.5-flash'
-    method = "zero-shot"  #'few-shot'
-    # model = initial_google_genai(model_name,
-    #                              max_output_tokens=2000,
-    #                              stop_sequences=['DONE!', '\n\n'])
-
-    MATRES_DATA_PATH = Path("../../data")
-    TRC_RAW_PATH = MATRES_DATA_PATH / "TRC"
-    results_path = (
-        TRC_RAW_PATH / "llm_response" / method / f"platinum-test-{model_name}.jsonl"
-    )
-    PLATINUM_RAW = MATRES_DATA_PATH / "MATRES" / "raw" / "TBAQ-cleaned" / "te3-platinum"
-    parsed_response_path = (
-        TRC_RAW_PATH
-        / "parsed_responses"
-        / method
-        / f"platinum-test-results-{model_name}.csv"
-    )
-
-    # generate_responses(model,
-    #                    platinum_text_prepared_path=TRC_RAW_PATH / 'raw_text' / 'platinum_text_prepared.json',
-    #                    prompt_path=TRC_RAW_PATH / 'prompts' / method / 'graph-generation-v1.txt',
-    #                    results_path=results_path)
-
-    all_parsed_response_df = pd.DataFrame(
-        columns=[
-            "docid",
-            "verb1",
-            "verb2",
-            "eiid1",
-            "eiid2",
-            "relation",
-            "unique_id",
-            "model_name",
-        ]
-    ).astype({"unique_id": str})
-    results_df = pd.read_json(results_path, lines=True)
-    for doc_id, group in results_df.groupby("doc_id"):
-        doc = Doc(PLATINUM_RAW / f"{doc_id}.tml")
-        for _, row in group.iterrows():
-            text = row.text
-            response = row.response
-
-            parsed_response_df = prepare_df_from_response(response, doc)
-            parsed_response_df["model_name"] = model_name
-            all_parsed_response_df = pd.concat(
-                [all_parsed_response_df, parsed_response_df], ignore_index=True
+        contents, instructions = self._contents(prompt)
+        config = types.GenerateContentConfig(
+            max_output_tokens=self.max_tokens,
+            temperature=self.temperature,
+            system_instruction=instructions,
+            thinking_config=types.ThinkingConfig(**self.reasoning_options) if getattr(self, "reasoning_options", {}) else None,
+        )
+        return [
+            self.model.models.generate_content(
+                model=self.model_name,
+                contents=contents,
+                config=config,
             )
+            for _ in range(self.n_trails)
+        ]
 
-    all_parsed_response_df.to_csv(parsed_response_path, index=False)
+    def prepare_response(self, responses):
+        results = []
+        for trail, response in enumerate(responses):
+            candidates = response.candidates or []
+            if len(candidates) != 1:
+                raise ValueError(
+                    f"Gemini returned no single text candidate: {response.prompt_feedback}"
+                )
+            candidate = candidates[0]
+            finish_reason = getattr(candidate.finish_reason, "value", candidate.finish_reason)
+            if finish_reason not in {None, "STOP"}:
+                raise ValueError(f"Gemini did not complete the response: {finish_reason}")
+            parts = candidate.content.parts if candidate.content else []
+            content = "".join(
+                part.text
+                for part in (parts or [])
+                if part.text and not part.thought
+            )
+            if not content.strip():
+                raise ValueError("Gemini returned no text content")
+            usage = response.usage_metadata
+            completion_tokens = getattr(usage, "candidates_token_count", None)
+            if completion_tokens is not None:
+                completion_tokens += getattr(usage, "thoughts_token_count", None) or 0
+            results.append(
+                {
+                    "trail": trail,
+                    "response": content,
+                    "content": content,
+                    "prompt_tokens": getattr(usage, "prompt_token_count", None),
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": getattr(usage, "total_token_count", None),
+                }
+            )
+        return results

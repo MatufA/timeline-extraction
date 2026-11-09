@@ -162,31 +162,32 @@ def majority_vote_decision_new(
     Returns:
         pd.DataFrame: Filtered dataframe with majority voted results
     """
-    # Read the parsed response CSV
     df = pd.read_csv(parsed_response_path)
-
-    # Group by docid, unique_id, and label, count votes
+    votes = df[df["p_label"].isin(["BEFORE", "AFTER", "EQUAL", "VAGUE"])].copy()
+    if "iter" in votes:
+        trial_keys = ["docid", "unique_id", "iter"]
+        votes = votes.drop_duplicates(trial_keys + ["p_label"])
+        # A trial that contradicts itself cannot cast multiple votes for a pair.
+        conflicts = votes.groupby(trial_keys)["p_label"].transform("nunique") > 1
+        votes = votes[~conflicts]
     vote_counts = (
-        df.groupby(["docid", "unique_id", "p_label"])
+        votes.groupby(["docid", "unique_id", "p_label"])
         .size()
         .reset_index(name="vote_count")
     )
-
-    # Find rows with at least min_votes
     qualified_votes = vote_counts[vote_counts["vote_count"] >= min_votes]
-
-    # For each (docid, unique_id), select the label with max votes
-    majority_labels = qualified_votes.loc[
-        qualified_votes.groupby(["docid", "unique_id"])["vote_count"].idxmax()
-    ]
-
-    # Merge back with original dataframe to get full row details
-    filtered_df = pd.merge(
-        df.drop_duplicates(subset=["docid", "unique_id", "p_label"]),
-        majority_labels[["docid", "unique_id", "p_label"]],
-        on=["docid", "unique_id", "p_label"],
-        how="inner",
-    )
+    if qualified_votes.empty:
+        filtered_df = df.iloc[:0].copy()
+    else:
+        majority_labels = qualified_votes.loc[
+            qualified_votes.groupby(["docid", "unique_id"])["vote_count"].idxmax()
+        ]
+        filtered_df = pd.merge(
+            votes.drop_duplicates(subset=["docid", "unique_id", "p_label"]),
+            majority_labels[["docid", "unique_id", "p_label"]],
+            on=["docid", "unique_id", "p_label"],
+            how="inner",
+        )
 
     # Save the filtered results
     filtered_df.to_csv(results_path, index=False)

@@ -63,12 +63,20 @@ def load_data(path: Union[str, Path]) -> pd.DataFrame:
     # Normalize relations
     df["relation"] = df["relation"].apply(normalize_relation)
 
-    # Handle AFTER relations by swapping events and converting to BEFORE
-    mask = df["relation"] == "AFTER"
-    df.loc[mask, ["verb1", "verb2"]] = df.loc[mask, ["verb2", "verb1"]].values
-    df.loc[mask, ["eiid1", "eiid2"]] = df.loc[mask, ["eiid2", "eiid1"]].values
+    # Preserve label meaning while putting every pair in numeric event-ID order.
+    first_numbers = df["eiid1"].str.extract(r"(\d+)$", expand=False).astype(int)
+    second_numbers = df["eiid2"].str.extract(r"(\d+)$", expand=False).astype(int)
+    reversed_pairs = first_numbers > second_numbers
+    df.loc[reversed_pairs, ["verb1", "verb2"]] = df.loc[
+        reversed_pairs, ["verb2", "verb1"]
+    ].to_numpy()
+    df.loc[reversed_pairs, ["eiid1", "eiid2"]] = df.loc[
+        reversed_pairs, ["eiid2", "eiid1"]
+    ].to_numpy()
+    df.loc[reversed_pairs, "relation"] = df.loc[reversed_pairs, "relation"].replace(
+        {"BEFORE": "AFTER", "AFTER": "BEFORE"}
+    )
     df["label"] = df["relation"].copy()
-    df["relation"] = df["relation"].replace("AFTER", "BEFORE")
 
     # Create unique IDs for event pairs
     df["unique_id"] = df.apply(
