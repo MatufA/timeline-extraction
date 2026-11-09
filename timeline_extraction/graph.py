@@ -71,23 +71,22 @@ class Graph:
         return pd.DataFrame(nodes_flatten).drop_duplicates(ignore_index=True)
 
     def _fit_df_to_equal(self, df):
+        """Contract complete equality components independently within each document."""
         self.equal_mapping = {}
-        equal_df = df.loc[df[self.relation_key] == "EQUAL", ["eiid1", "eiid2"]]
-        for _, row in equal_df.iterrows():
-            key = f"{row.eiid1}${row.eiid2}"
-
-            eiids = [row.eiid1, row.eiid2]
-
-            for eiid in eiids:
-                if eiid in self.equal_mapping:
-                    old_key_set = list(set(self.equal_mapping[eiid].split("$") + eiids))
-                    key = "$".join(sorted(old_key_set))
-                else:
-                    key = "$".join(sorted(eiids))
-
-                self.equal_mapping[eiid] = key
-
-        return df.replace({"eiid1": self.equal_mapping, "eiid2": self.equal_mapping})
+        fitted = df.copy()
+        for docid, group in df.groupby("docid"):
+            equal_df = group.loc[group[self.relation_key] == "EQUAL", ["eiid1", "eiid2"]]
+            equality_graph = nx.Graph()
+            equality_graph.add_edges_from(equal_df.itertuples(index=False, name=None))
+            mapping = {}
+            for component in nx.connected_components(equality_graph):
+                key = "$".join(sorted(component))
+                mapping.update(dict.fromkeys(component, key))
+            self.equal_mapping.update(mapping)
+            mask = fitted["docid"] == docid
+            for column in ("eiid1", "eiid2"):
+                fitted.loc[mask, column] = fitted.loc[mask, column].replace(mapping)
+        return fitted
 
     def generate_directed_graph(self, df):
         if self.use_equal:
@@ -128,13 +127,12 @@ class Graph:
     def find_cycles(self, df):
         cycles = {}
         idx = 0
-        for _, group in df.groupby("docid"):
-            if group[self.relation_key].isin(self.supported_relation).count() < 3:
+        for docid, group in df.groupby("docid"):
+            if not group[self.relation_key].isin(self.supported_relation).any():
                 continue
             try:
                 sub_graph = self.generate_directed_graph(df=group)
                 cycle = nx.find_cycle(sub_graph, orientation="original")
-                docid = cycle[0][0].split("-")[0]
                 if docid in cycles:
                     cycles[docid].append(cycle)
                 else:

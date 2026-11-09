@@ -1,49 +1,49 @@
 import os
+from typing import Optional, Type
+
 from together import Together
 
-from timeline_extraction.models.LLModel import LLModel
-
-# client = Together(api_key=os.environ.get("TOGETHER_API_KEY"))
-#
-# stream = client.chat.completions.create(
-#     model="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
-#     messages=[{"role": "user", "content": "What are some fun things to do in New York?"}],
-#     stream=True,
-# )
-#
-# for chunk in stream:
-#     print(chunk.choices[0].delta.content or "", end="", flush=True)
+from timeline_extraction.models.LLModel import LLModel, LabelParser, Parser
+from timeline_extraction.models._responses import chat_messages, chat_response
+from timeline_extraction.models._reasoning import reasoning_options
 
 
 class TogetherAIClient(LLModel):
-    def __init__(self, model_name: str, n_trails: int = 5):
-        model = self._initial_client()
-        self.model_name: str = model_name
-        super().__init__(model, each_trail=False, each_doc=True, n_trails=n_trails)
-
-    @staticmethod
-    def _initial_client() -> Together:
-        return Together(api_key=os.environ.get("TOGETHER_API_KEY"))
-
-    def generate_response(self, prompt):
-        return self.model.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            model=self.model_name,
+    def __init__(
+        self,
+        model_name: str,
+        api_key: Optional[str] = None,
+        max_tokens: int = 2000,
+        temperature: float = 0.0,
+        n_trails: int = 5,
+        parser: Type[Parser] = LabelParser,
+        *,
+        reasoning_effort: Optional[str] = None,
+    ):
+        self.model_name = model_name
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.reasoning_options = reasoning_options("together", model_name, reasoning_effort)
+        super().__init__(
+            Together(api_key=api_key or os.environ.get("TOGETHER_API_KEY")),
+            each_trail=False,
+            each_doc=True,
+            n_trails=n_trails,
+            parser=parser,
         )
 
-    def prepare_response(self, response):
-        return {
-            "response": response.choices[0].message.content,
-            "prompt_tokens": response.usage.prompt_tokens,
-            "completion_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens,
-        }
+    def generate_response(self, prompt):
+        messages = chat_messages(prompt)
+        return [
+            self.model.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                **getattr(self, "reasoning_options", {}),
+            )
+            for _ in range(self.n_trails)
+        ]
 
-
-if __name__ == "__main__":
-    model = TogetherAIClient(model_name="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo")
+    def prepare_response(self, responses):
+        return [chat_response(response, trail) for trail, response in enumerate(responses)]
