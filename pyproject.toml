@@ -31,8 +31,11 @@ dependencies = [
 [project.optional-dependencies]
 tracking = [
     "langfuse>=5,<6",
-    "langsmith>=0.4,<1",
+    "langsmith>=0.14.17,<1",
 ]
+
+[tool.setuptools.packages.find]
+include = ["timeline_extraction*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

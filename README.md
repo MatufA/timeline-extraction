@@ -41,6 +41,14 @@ pip install -e .
 
 ```
 
+### Building distributions
+
+```bash
+rtk uv build
+```
+
+Package discovery includes only `timeline_extraction*`, so generated `results/` directories are not packaged. The optional `tracking` extra requires LangSmith `>=0.14.17,<1`; application tracing uses ingestion APIs unchanged by the SmithDB query migration.
+
 ### Basic Usage
 
 ```bash
