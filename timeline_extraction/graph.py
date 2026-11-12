@@ -323,6 +323,21 @@ def break_cycles_by_confidence(cycles: list, df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def break_cycles_by_transitive_ilp(
+    df: pd.DataFrame,
+    *,
+    use_vague: bool | None = None,
+    label_col: str = "p_label",
+) -> pd.DataFrame:
+    """Resolve temporal cycles globally via Ning et al. (2018a) Transitive Constraints ILP."""
+    from timeline_extraction.data.postprocessing import transitive_constraints_decision_ilp
+
+    target_col = label_col if label_col in df.columns else "relation"
+    return transitive_constraints_decision_ilp(
+        df, use_vague=use_vague, label_col=target_col
+    )
+
+
 if __name__ == "__main__":
     from pathlib import Path
 
