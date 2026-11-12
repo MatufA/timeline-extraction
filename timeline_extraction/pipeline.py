@@ -550,10 +550,36 @@ class TimelineExtractionPipeline:
                     continue
                 label = p_label
                 true_label = str(row.get("true_label", "NO_TRUE_LABEL")).upper()
+                raw_content = row.get("content", row.response)
                 if numbers[0] > numbers[1]:
                     e1, e2 = e2, e1
                     label = {"BEFORE": "AFTER", "AFTER": "BEFORE"}.get(label, label)
                     true_label = {"BEFORE": "AFTER", "AFTER": "BEFORE"}.get(true_label, true_label)
+                    if isinstance(raw_content, str) and raw_content.lstrip().startswith("{"):
+                        try:
+                            payload = json.loads(raw_content)
+                            if isinstance(payload, dict) and isinstance(payload.get("probabilities"), dict):
+                                probs = dict(payload["probabilities"])
+                                if "before" in probs or "after" in probs:
+                                    b_val = probs.get("before")
+                                    a_val = probs.get("after")
+                                    if a_val is not None:
+                                        probs["before"] = a_val
+                                    else:
+                                        probs.pop("before", None)
+                                    if b_val is not None:
+                                        probs["after"] = b_val
+                                    else:
+                                        probs.pop("after", None)
+                                payload["probabilities"] = probs
+                                if isinstance(payload.get("choice"), str):
+                                    payload["choice"] = {
+                                        "before": "after",
+                                        "after": "before",
+                                    }.get(payload["choice"].lower(), payload["choice"])
+                                raw_content = json.dumps(payload, sort_keys=True)
+                        except json.JSONDecodeError:
+                            pass
                 data.append({
                     "docid": row.doc_id,
                     "eiid1": e1,
@@ -565,7 +591,7 @@ class TimelineExtractionPipeline:
                     "model_name": config.model_name,
                     "iter": row.trail,
                     "prompt": row.prompt,
-                    "raw_response": row.get("content", row.response),
+                    "raw_response": raw_content,
                 })
         
         # Save parsed responses

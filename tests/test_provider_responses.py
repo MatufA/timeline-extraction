@@ -15,7 +15,7 @@ from timeline_extraction.models.gemini import Gemini
 from timeline_extraction.models.llama3 import GroqModel
 
 
-@pytest.mark.parametrize("provider,model,effort", [("openai", "gpt-4o", "high"), ("openai", "gpt-6.1-sol", "none"), ("openai", "gpt-6-astra", "none"), ("openai", "gpt-6-astra", "minimal"), ("google", "gemini-3.8-flash", "minimal"), ("google", "gemini-3.8-flash", "none"), ("groq", "openai/gpt-oss-120b", "xhigh"), ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "high"), ("huggingface", "any", "high")])
+@pytest.mark.parametrize("provider,model,effort", [("openai", "gpt-4o", "high"), ("openai", "gpt-6.1-sol", "none"), ("openai", "gpt-6-astra", "none"), ("openai", "gpt-6-astra", "minimal"), ("google", "gemini-3.8-flash", "minimal"), ("google", "gemini-3.8-flash", "none"), ("google", "gemini-decision-1", "high"), ("groq", "openai/gpt-oss-120b", "xhigh"), ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "high"), ("huggingface", "any", "high")])
 def test_unsupported_reasoning_is_explicit(provider, model, effort):
     with pytest.raises(ValueError):
         ModelConfig(name=model, provider=provider, reasoning_effort=effort)
@@ -208,3 +208,115 @@ def test_local_response_excludes_prompt_and_counts_generated_token_ids():
         "trail": 0, "content": "before", "response": "before",
         "prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3,
     }
+
+
+def test_gemini_decision_builds_direct_subject_state_and_typed_choice_question():
+    from timeline_extraction.prompts.Prompt import PairwisePrompt
+
+    prompt = PairwisePrompt(use_vague=True, use_few_shot=False).generate_dict_prompt(
+        text="Heavy snow is [EVENT2]causing[/EVENT2] disruption, with rainfall [EVENT5]bringing[/EVENT5] flooding.",
+        relations=[["ei2", "ei5"]],
+    )
+    input_text, questions = Gemini._decision_request(prompt)
+    assert input_text == (
+        "Heavy snow is [EVENT2]causing[/EVENT2] disruption, with rainfall [EVENT5]bringing[/EVENT5] flooding."
+    )
+    assert "Task Overview" not in input_text
+    assert "in one word" not in input_text
+    question = questions["temporal_relation"]
+    assert question["type"] == "choice"
+    assert "[EVENT2]causing[/EVENT2]" in question["instructions"]
+    assert "[EVENT5]bringing[/EVENT5]" in question["instructions"]
+    assert set(question["criteria"]) == {"before", "after", "equal", "vague"}
+
+    no_vague_prompt = PairwisePrompt(use_vague=False, use_few_shot=True).generate_dict_prompt(
+        text="He [EVENT9]arrived[/EVENT9] after she [EVENT3]left[/EVENT3].",
+        relations=[["ei9", "ei3"]],
+    )
+    no_vague_input, no_vague_questions = Gemini._decision_request(no_vague_prompt)
+    assert no_vague_input.startswith("Examples:\n")
+    assert no_vague_input.endswith("He [EVENT9]arrived[/EVENT9] after she [EVENT3]left[/EVENT3].")
+    assert "[EVENT9]arrived[/EVENT9]" in no_vague_questions["temporal_relation"]["instructions"]
+    assert "[EVENT3]left[/EVENT3]" in no_vague_questions["temporal_relation"]["instructions"]
+    assert set(no_vague_questions["temporal_relation"]["criteria"]) == {"before", "after", "equal"}
+
+
+def test_gemini_decision_normalizes_choice_probabilities_and_zero_output_tokens():
+    import json
+    from google.genai._gaos.types import decisions
+    from timeline_extraction.prompts.Prompt import PairwisePrompt
+
+    calls = []
+    raw = decisions.CreateDecisionResponse.model_validate(
+        {
+            "answers": {
+                "temporal_relation": {
+                    "type": "choice",
+                    "choice": "after",
+                    "confidence": 0.91,
+                    "probabilities": {
+                        "after": 0.91,
+                        "before": 0.04,
+                        "equal": 0.03,
+                        "vague": 0.02,
+                    },
+                }
+            },
+            "usage": {
+                "total_input_tokens": 120,
+                "total_output_tokens": 0,
+                "total_tokens": 120,
+            },
+        }
+    )
+    model = Gemini.__new__(Gemini)
+    model.model_name = "models/gemini-decision-1"
+    model.is_decision_model = True
+    model.n_trails = 1
+    model.model = SimpleNamespace(
+        decisions=SimpleNamespace(
+            create=lambda **kwargs: (calls.append(kwargs) or raw)
+        )
+    )
+    prompt = PairwisePrompt(use_vague=True).generate_dict_prompt(
+        text="Heavy snow is [EVENT2]causing[/EVENT2] disruption, with rainfall [EVENT5]bringing[/EVENT5] flooding.",
+        relations=[["ei2", "ei5"]],
+    )
+    responses = model.generate_response(prompt)
+    assert len(calls) == 1
+    assert calls[0]["model"] == "gemini-decision-1"
+    assert calls[0]["api_version"] == "v1beta"
+    result = model.prepare_response(responses)[0]
+    assert result["response"] == "after"
+    assert json.loads(result["content"]) == {
+        "choice": "after",
+        "confidence": 0.91,
+        "probabilities": {
+            "after": 0.91,
+            "before": 0.04,
+            "equal": 0.03,
+            "vague": 0.02,
+        },
+    }
+    assert result["prompt_tokens"] == 120
+    assert result["completion_tokens"] == 0
+    assert result["total_tokens"] == 120
+
+
+def test_gemini_decision_rejects_blocked_missing_or_multi_mode_usage():
+    from google.genai._gaos.types import decisions
+    from timeline_extraction.models.LLModel import JsonParser
+
+    with pytest.raises(ValueError, match="only supports pairwise classification"):
+        Gemini("gemini-decision-1", api_key="test", parser=JsonParser)
+
+    model = Gemini.__new__(Gemini)
+    blocked = decisions.CreateDecisionResponse.model_validate(
+        {"prompt_feedback": {"block_reason": "SAFETY"}}
+    )
+    with pytest.raises(ValueError, match="decision request blocked"):
+        model.prepare_response([blocked])
+
+    empty = decisions.CreateDecisionResponse.model_validate({"answers": {}})
+    with pytest.raises(ValueError, match="missing 'temporal_relation' answer"):
+        model.prepare_response([empty])

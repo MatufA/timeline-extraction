@@ -42,7 +42,7 @@ def reasoning_options(provider: str, model: str, effort: str | None):
             raise ValueError(f"{model} does not support reasoning effort {effort}; supported: {', '.join(sorted(supported))}")
         return {"reasoning": {"effort": effort}}
     if provider == "google":
-        if re.match(r"^gemini-(?:1|2\.0)(?:\D|$)", name):
+        if re.match(r"^gemini-(?:1|2\.0|decision)(?:\D|$)", name):
             raise ValueError(f"{model} does not support thinking levels")
         # GenerateContent's old 2.5 budget is not equivalent to effort levels.
         if name.startswith("gemini-2.5"):

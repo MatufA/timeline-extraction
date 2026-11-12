@@ -145,3 +145,62 @@ def test_equality_contraction_does_not_cross_documents():
     directed = graph.generate_directed_graph(frame)
     assert ("first-ei1$ei2", "first-ei1$ei2") in directed.edges
     assert ("second-ei1", "second-ei2") in directed.edges
+
+
+def test_ning_ilp_replaces_majority_voting_and_breaks_triangle_and_sparse_cycles(tmp_path):
+    import json
+    from timeline_extraction.metrics import get_n_graph_cycles
+
+    def raw_probs(choice, probs):
+        return json.dumps({"choice": choice, "confidence": probs[choice], "probabilities": probs})
+
+    # Document 1: Triangle cycle (ei1 < ei2 < ei3, but ei1 > ei3 has weak majority 0.52 vs 0.44 before)
+    # Document 2: Sparse 4-cycle (ei1 < ei2 < ei3 < ei4, and ei1 > ei4 with no chord ei1-ei3)
+    rows = [
+        {
+            "docid": "doc_tri", "eiid1": "ei1", "eiid2": "ei2", "unique_id": "ei1-ei2",
+            "p_label": "BEFORE", "iter": 0,
+            "raw_response": raw_probs("before", {"before": 0.92, "after": 0.04, "equal": 0.02, "vague": 0.02}),
+        },
+        {
+            "docid": "doc_tri", "eiid1": "ei2", "eiid2": "ei3", "unique_id": "ei2-ei3",
+            "p_label": "BEFORE", "iter": 0,
+            "raw_response": raw_probs("before", {"before": 0.90, "after": 0.05, "equal": 0.03, "vague": 0.02}),
+        },
+        {
+            "docid": "doc_tri", "eiid1": "ei1", "eiid2": "ei3", "unique_id": "ei1-ei3",
+            "p_label": "AFTER", "iter": 0,
+            "raw_response": raw_probs("after", {"before": 0.44, "after": 0.52, "equal": 0.02, "vague": 0.02}),
+        },
+        {
+            "docid": "doc_sparse4", "eiid1": "ei1", "eiid2": "ei2", "unique_id": "ei1-ei2",
+            "p_label": "BEFORE", "iter": 0,
+            "raw_response": raw_probs("before", {"before": 0.95, "after": 0.02, "equal": 0.02, "vague": 0.01}),
+        },
+        {
+            "docid": "doc_sparse4", "eiid1": "ei2", "eiid2": "ei3", "unique_id": "ei2-ei3",
+            "p_label": "BEFORE", "iter": 0,
+            "raw_response": raw_probs("before", {"before": 0.95, "after": 0.02, "equal": 0.02, "vague": 0.01}),
+        },
+        {
+            "docid": "doc_sparse4", "eiid1": "ei3", "eiid2": "ei4", "unique_id": "ei3-ei4",
+            "p_label": "BEFORE", "iter": 0,
+            "raw_response": raw_probs("before", {"before": 0.95, "after": 0.02, "equal": 0.02, "vague": 0.01}),
+        },
+        {
+            "docid": "doc_sparse4", "eiid1": "ei1", "eiid2": "ei4", "unique_id": "ei1-ei4",
+            "p_label": "AFTER", "iter": 0,
+            "raw_response": raw_probs("after", {"before": 0.40, "after": 0.55, "equal": 0.02, "vague": 0.03}),
+        },
+    ]
+    source, target = tmp_path / "parsed.csv", tmp_path / "results.csv"
+    raw_df = pd.DataFrame(rows)
+    assert get_n_graph_cycles(raw_df, "p_label") == {"doc_tri": 1, "doc_sparse4": 1}
+    raw_df.to_csv(source, index=False)
+
+    resolved = majority_vote_decision_new(source, target, 1)
+    assert get_n_graph_cycles(resolved, "p_label") == {}
+    tri_labels = dict(zip(resolved[resolved.docid == "doc_tri"].unique_id, resolved[resolved.docid == "doc_tri"].p_label))
+    assert tri_labels["ei1-ei3"] == "BEFORE"
+    sparse_labels = dict(zip(resolved[resolved.docid == "doc_sparse4"].unique_id, resolved[resolved.docid == "doc_sparse4"].p_label))
+    assert sparse_labels["ei1-ei4"] == "BEFORE"
